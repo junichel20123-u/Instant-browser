@@ -2,8 +2,8 @@
 resolver = "3"
 members = ["crates/*", "xtask"]
 default-members = [
-    "crates/rajada-types", "crates/rajada-i18n", "crates/rajada-engine", "crates/rajada-store",
-    "crates/rajada-daemon", "crates/rajada-cli", "crates/rajada-tui", "crates/rajada-host",
+    "crates/idb-types", "crates/idb-i18n", "crates/idb-engine", "crates/idb-store",
+    "crates/idb-daemon", "crates/idb-cli", "crates/idb-tui", "crates/idb-host",
     "crates/faultbox", "xtask",
 ]
 
@@ -14,10 +14,10 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.89"
 
 [workspace.dependencies]
-rajada-types = { path = "crates/rajada-types" }
-rajada-i18n = { path = "crates/rajada-i18n" }
-rajada-store = { path = "crates/rajada-store" }
-rajada-engine = { path = "crates/rajada-engine" }
+idb-types = { path = "crates/idb-types" }
+idb-i18n = { path = "crates/idb-i18n" }
+idb-store = { path = "crates/idb-store" }
+idb-engine = { path = "crates/idb-engine" }
 faultbox = { path = "crates/faultbox" }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
 rusqlite = { version = "0.42", features = ["bundled"] }

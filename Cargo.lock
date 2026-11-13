@@ -830,6 +830,85 @@ dependencies = [
 ]
 
 [[package]]
+name = "idb-cli"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "faultbox",
+ "idb-engine",
+ "idb-i18n",
+ "idb-store",
+ "idb-types",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "idb-daemon"
+version = "0.0.1"
+
+[[package]]
+name = "idb-engine"
+version = "0.0.1"
+dependencies = [
+ "faultbox",
+ "idb-store",
+ "idb-types",
+ "proptest",
+ "reqwest",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "idb-gtk"
+version = "0.0.1"
+
+[[package]]
+name = "idb-host"
+version = "0.0.1"
+
+[[package]]
+name = "idb-i18n"
+version = "0.0.1"
+dependencies = [
+ "idb-types",
+ "insta",
+]
+
+[[package]]
+name = "idb-store"
+version = "0.0.1"
+dependencies = [
+ "idb-types",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "idb-tui"
+version = "0.0.1"
+
+[[package]]
+name = "idb-types"
+version = "0.0.1"
+dependencies = [
+ "insta",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1224,85 +1303,6 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
-name = "rajada-cli"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "faultbox",
- "rajada-engine",
- "rajada-i18n",
- "rajada-store",
- "rajada-types",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "rajada-daemon"
-version = "0.0.1"
-
-[[package]]
-name = "rajada-engine"
-version = "0.0.1"
-dependencies = [
- "faultbox",
- "proptest",
- "rajada-store",
- "rajada-types",
- "reqwest",
- "sha2",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rajada-gtk"
-version = "0.0.1"
-
-[[package]]
-name = "rajada-host"
-version = "0.0.1"
-
-[[package]]
-name = "rajada-i18n"
-version = "0.0.1"
-dependencies = [
- "insta",
- "rajada-types",
-]
-
-[[package]]
-name = "rajada-store"
-version = "0.0.1"
-dependencies = [
- "rajada-types",
- "rusqlite",
- "serde_json",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "rajada-tui"
-version = "0.0.1"
-
-[[package]]
-name = "rajada-types"
-version = "0.0.1"
-dependencies = [
- "insta",
- "proptest",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "rand"

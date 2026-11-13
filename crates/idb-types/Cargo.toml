@@ -1,0 +1,17 @@
+[package]
+name = "idb-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared states, reasons, diagnostics and API schema for IDB"
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+proptest.workspace = true
+insta.workspace = true
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
-# Rajada
+# Instant Download Browser (IDB)
 
-Gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvolvimento (Fase 1.1: motor com uma conexão).**
+O **Instant Download Browser (IDB)** é um gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvolvimento (Fase 1.1: motor com uma conexão).**
 
 - Acelera **quando é possível**, com múltiplas conexões HTTP Range ajustadas automaticamente.
 - **Não promete o impossível:** nenhum programa passa da velocidade contratada da sua internet.
@@ -8,14 +8,14 @@ Gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvol
 - **Seguro por padrão**, **educado com servidores** e **sem telemetria**.
 
 ## Estado atual
-- `rajada-types`: estados, motivos, níveis de verificação, diagnósticos e eventos da API.
-- `rajada-i18n`: textos em pt-BR e inglês.
+- `idb-types`: estados, motivos, níveis de verificação, diagnósticos e eventos da API.
+- `idb-i18n`: textos em pt-BR e inglês.
 - `faultbox`: servidor de teste com injeção de falhas.
-- `rajada-engine` + `rajada-store` + `rajada get`: download com uma conexão, retomada, journal e verificação.
+- `idb-engine` + `idb-store` + `idb get`: download com uma conexão, retomada, journal e verificação.
 
 ## Uso (Fase 1.1)
 ```sh
-rajada get URL [-d PASTA] [--sha256 HEX] [--json]
+idb get URL [-d PASTA] [--sha256 HEX] [--json]
 ```
 Rodar de novo o mesmo comando retoma de onde parou. O arquivo é baixado como `.part` e só recebe o nome final depois
 de verificado.

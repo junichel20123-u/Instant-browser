@@ -1,3 +1,5 @@
+> **Nota (nov/2026):** o nome provisório "Rajada" foi substituído por **Instant Download Browser (IDB)**. Crates e binários usam o prefixo `idb` (`idb`, `idbd`, `idb-gtk`, `idb-tui`, `idb-host`). Veja `docs/adr/0004-name-instant-download-browser.md`. O texto abaixo é a especificação original, sem alterações.
+
 # PROMPT MESTRE — Projeto "Rajada": acelerador e gerenciador de downloads para Linux
 
 > **Nome provisório:** "Rajada" (binários `rajada`, `rajadad`, `rajada-gtk`, `rajada-host`). Pode ser trocado depois. Evitei "Fluxo" porque já existe um projeto chamado FluxDown.

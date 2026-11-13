@@ -1,0 +1,24 @@
+[package]
+name = "idb-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IDB download engine"
+
+[dependencies]
+idb-types.workspace = true
+idb-store.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+faultbox.workspace = true
+tempfile.workspace = true
+proptest.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@
 - **Contexto:** a especificação pede gettext. O `gettext-rs` 0.8 depende de libintl/msgfmt do sistema ou compila o
   gettext do C, o que torna o build e o CI mais lentos e complica o build estático (musl). Na Fase 0 só precisamos de
   um catálogo pequeno, compartilhado por todos os clientes.
-- **Decisão:** manter os catálogos no formato gettext `.po` (`crates/rajada-i18n/po/`), embutidos com `include_str!` e
+- **Decisão:** manter os catálogos no formato gettext `.po` (`crates/idb-i18n/po/`), embutidos com `include_str!` e
   lidos por um parser mínimo em Rust (strings simples, continuações e escapes `\n \t \" \\`). As chaves são msgids
   estáveis (`state.Queued`) e os parâmetros usam marcadores `{nome}`.
 - **Consequências:** zero dependências de sistema; os arquivos continuam editáveis por ferramentas de tradução

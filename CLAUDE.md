@@ -1,6 +1,6 @@
-# CLAUDE.md — Rajada
+# CLAUDE.md — Instant Download Browser (IDB)
 
-Rajada é um gerenciador e acelerador de downloads para Linux, em Rust.
+O Instant Download Browser (IDB) é um gerenciador e acelerador de downloads para Linux, em Rust.
 Ele descobre sozinho a forma mais rápida **e educada** de baixar, nunca entrega um arquivo errado
 e explica em português claro por que um download está lento. Daemon leve + CLI, TUI, extensão e GUI GTK4.
 
@@ -13,22 +13,22 @@ Arquitetura: `docs/ARQUITETURA.md` · API: `docs/API.md` · Decisões: `docs/adr
 3. Educado com servidores (teto por host, `Retry-After`, recuo em 429/503).
 4. Honesto sobre velocidade (mede, decide, explica; nada de "até 10×").
 5. Leve (sem polling, sem trabalho quando nada muda).
-6. Uma verdade só (estados, códigos e textos em `rajada-types` + `rajada-i18n`).
+6. Uma verdade só (estados, códigos e textos em `idb-types` + `idb-i18n`).
 7. Explicável (toda falha tem um próximo passo concreto).
 
 ## Workspace
 | Crate | Papel | Estado |
 |---|---|---|
-| `crates/rajada-types` | estados, motivos, `VerificationLevel`, diagnósticos, eventos, `API_VERSION` | Fase 0 ✅ |
-| `crates/rajada-i18n` | catálogo `.po` (pt-BR, en) + formatação por locale | Fase 0 ✅ |
+| `crates/idb-types` | estados, motivos, `VerificationLevel`, diagnósticos, eventos, `API_VERSION` | Fase 0 ✅ |
+| `crates/idb-i18n` | catálogo `.po` (pt-BR, en) + formatação por locale | Fase 0 ✅ |
 | `crates/faultbox` | servidor HTTP de teste com injeção de falhas (lib + bin) | Fase 0 ✅ |
-| `crates/rajada-engine` | motor de download (biblioteca) | Fase 1.1 ✅ (1 conexão) |
-| `crates/rajada-store` | journal SQLite (WAL) | Fase 1.1 ✅ |
-| `crates/rajada-daemon` | bin `rajadad` | esqueleto |
-| `crates/rajada-cli` | bin `rajada` (`rajada get`, usa o motor direto) | Fase 1.1 ✅ |
-| `crates/rajada-tui` | bin `rajada-tui` | esqueleto |
-| `crates/rajada-gtk` | bin `rajada-gtk` (fora de `default-members`) | esqueleto |
-| `crates/rajada-host` | bin `rajada-host` (native messaging) | esqueleto |
+| `crates/idb-engine` | motor de download (biblioteca) | Fase 1.1 ✅ (1 conexão) |
+| `crates/idb-store` | journal SQLite (WAL) | Fase 1.1 ✅ |
+| `crates/idb-daemon` | bin `idbd` | esqueleto |
+| `crates/idb-cli` | bin `idb` (`idb get`, usa o motor direto) | Fase 1.1 ✅ |
+| `crates/idb-tui` | bin `idb-tui` | esqueleto |
+| `crates/idb-gtk` | bin `idb-gtk` (fora de `default-members`) | esqueleto |
+| `crates/idb-host` | bin `idb-host` (native messaging) | esqueleto |
 | `xtask` | automação (`cargo xtask ci`) | Fase 0 ✅ |
 
 ## Comandos
@@ -38,7 +38,7 @@ cargo test -p faultbox              # testes do servidor de falhas
 cargo run -p faultbox -- --port 8080
 curl -r 0-99 'http://127.0.0.1:8080/file?size=1048576&seed=1'
 INSTA_UPDATE=always cargo test      # regravar snapshots (revise o diff!)
-RAJADA_CRASH_ITERS=1000 cargo test --release -p rajada-cli   # aceite de crash injection
+IDB_CRASH_ITERS=1000 cargo test --release -p idb-cli   # aceite de crash injection
 ```
 Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_conn=N`,
 `429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html` (ver `crates/faultbox/src/lib.rs`).
@@ -50,7 +50,7 @@ Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_con
 
 ## Regras de código
 - Código, identificadores, comentários e commits em **inglês**. Textos para o usuário em pt-BR **e** en,
-  sempre via `rajada-i18n` (nunca strings soltas nos clientes).
+  sempre via `idb-i18n` (nunca strings soltas nos clientes).
 - Sem `unwrap()`/`expect()` fora de testes (lint `deny` no workspace); sem `unsafe` (`forbid`).
 - `thiserror` nas bibliotecas, `anyhow` só nos binários.
 - Newtypes para bytes, offsets e IDs (`ByteCount`, `ByteOffset`, `DownloadId`).
@@ -72,6 +72,6 @@ escolher nome/licença definitivos · rodar comandos como root ou que alterem o 
 6. Commit pequeno, com mensagem clara.
 
 ## Decisões provisórias (pendentes de confirmação)
-- Licença `MIT OR Apache-2.0`; nome "Rajada"; edição 2024.
+- Licença `MIT OR Apache-2.0`; edição 2024. (Nome definido: Instant Download Browser — ADR-0004.)
 - i18n: `.po` parseado em Rust puro em vez de `gettext-rs` (ADR-0002).
 - `Retry-After` só em segundos (data HTTP ainda não é interpretada; usa backoff).

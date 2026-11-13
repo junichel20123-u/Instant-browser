@@ -1,0 +1,29 @@
+[package]
+name = "idb-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IDB command-line client"
+
+[[bin]]
+name = "idb"
+path = "src/main.rs"
+
+[dependencies]
+idb-types.workspace = true
+idb-i18n.workspace = true
+idb-engine.workspace = true
+idb-store.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+faultbox.workspace = true
+tempfile.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
