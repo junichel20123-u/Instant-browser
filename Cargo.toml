@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+default-members = [
+    "crates/rajada-types", "crates/rajada-i18n", "crates/rajada-engine", "crates/rajada-store",
+    "crates/rajada-daemon", "crates/rajada-cli", "crates/rajada-tui", "crates/rajada-host",
+    "crates/faultbox", "xtask",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+rajada-types = { path = "crates/rajada-types" }
+rajada-i18n = { path = "crates/rajada-i18n" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+anyhow = "1.0"
+tokio = { version = "1.54", features = ["io-util", "rt-multi-thread", "macros", "net", "time", "sync"] }
+axum = "0.8"
+bytes = "1"
+sha2 = "0.10"
+http-body-util = "0.1"
+hyper = { version = "1.12", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.6", features = ["derive"] }
+proptest = "1.12"
+insta = { version = "1.49", features = ["json"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.release]
+lto = "thin"
+strip = true

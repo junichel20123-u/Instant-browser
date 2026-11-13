@@ -1,0 +1,12 @@
+[package]
+name = "rajada-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rajada-tui"
+path = "src/main.rs"
+
+[lints]
+workspace = true
