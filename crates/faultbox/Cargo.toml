@@ -1,0 +1,27 @@
+[package]
+name = "faultbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "HTTP test server with fault injection for Rajada"
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+sha2.workspace = true
+futures-util.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+
+[lints]
+workspace = true
