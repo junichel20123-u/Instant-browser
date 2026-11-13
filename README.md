@@ -1,6 +1,6 @@
 # Rajada
 
-Gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvolvimento (Fase 0: fundação).**
+Gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvolvimento (Fase 1.1: motor com uma conexão).**
 
 - Acelera **quando é possível**, com múltiplas conexões HTTP Range ajustadas automaticamente.
 - **Não promete o impossível:** nenhum programa passa da velocidade contratada da sua internet.
@@ -11,6 +11,21 @@ Gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvol
 - `rajada-types`: estados, motivos, níveis de verificação, diagnósticos e eventos da API.
 - `rajada-i18n`: textos em pt-BR e inglês.
 - `faultbox`: servidor de teste com injeção de falhas.
+- `rajada-engine` + `rajada-store` + `rajada get`: download com uma conexão, retomada, journal e verificação.
+
+## Uso (Fase 1.1)
+```sh
+rajada get URL [-d PASTA] [--sha256 HEX] [--json]
+```
+Rodar de novo o mesmo comando retoma de onde parou. O arquivo é baixado como `.part` e só recebe o nome final depois
+de verificado.
+
+| Código de saída | Significado |
+|---|---|
+| 0 | Concluído e verificado |
+| 1 | Falhou (a mensagem diz o próximo passo) |
+| 2 | Precisa de você (link expirou, login, arquivo mudou, disco cheio...) |
+| 3 | Erro interno |
 
 ## Desenvolvimento
 ```sh

@@ -30,3 +30,22 @@ rajadad ── rajada-engine ── rajada-store (SQLite WAL)
 - Range simples (`a-b`, `a-`, `-n`), 416 com `Content-Range: bytes */N`, ETag forte, `Last-Modified`, `If-Range`.
 - Cenários por query string; o estado compartilhado (respostas em andamento, bytes servidos, versão) fica por instância
   do servidor, então cada teste chama `faultbox::spawn()` e recebe um servidor isolado numa porta efêmera.
+
+## rajada-store (Fase 1.1)
+Tabela `downloads` única por `(url, dir)`: metadados do recurso (URL final, nome, total, ETag, `Last-Modified`),
+`downloaded` (bytes **duráveis**), estado (JSON de `DownloadState`) e `final_path`. SQLite em WAL com `synchronous=NORMAL`.
+
+## rajada-engine (Fase 1.1)
+Fluxo de uma conexão (`Downloader::run`):
+1. `prepare`: retoma o registro anterior (exceto `ResourceChanged`/`VerificationFailed`, que recomeçam) ou cria um novo.
+2. Cada tentativa: `GET` com `Range: bytes=<offset>-`, `Accept-Encoding: identity` e `If-Range` ao retomar.
+   - 206 com `Content-Range` coerente → continua no offset; 200 ao retomar → mesmo validador: recomeça do zero com
+     esse corpo; validador diferente: `NeedsUser(ResourceChanged)`.
+   - 429/503/5xx/erros de rede → retry com `Retry-After` (estado `PoliteWait`) ou backoff exponencial com jitter;
+     desiste depois de `max_attempts` falhas seguidas **sem progresso novo**.
+   - 404/410 → `Failed(NotFound)`; 401/403 → `NeedsUser(LoginRequired)`; HTML inesperado → `NeedsUser(HtmlInsteadOfFile)`.
+3. Checkpoint a cada 4 MiB **ou** 1 s: `fdatasync` do `.part`, depois `downloaded` no journal.
+4. Verificação: tamanho exato; SHA-256 se o usuário informou; nível `SizeAndValidator`/`SizeOnly`/`Unverified`.
+5. Publicação: grava `final_path`, faz o `rename` atômico (sem sobrescrever: `nome (1).ext`) e grava `Complete`.
+
+O journal é acessado via `spawn_blocking`; a escrita usa `tokio::fs`. Segmentação, `pwrite` e pré-alocação ficam para a Fase 1.2.

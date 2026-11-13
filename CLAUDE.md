@@ -22,10 +22,10 @@ Arquitetura: `docs/ARQUITETURA.md` · API: `docs/API.md` · Decisões: `docs/adr
 | `crates/rajada-types` | estados, motivos, `VerificationLevel`, diagnósticos, eventos, `API_VERSION` | Fase 0 ✅ |
 | `crates/rajada-i18n` | catálogo `.po` (pt-BR, en) + formatação por locale | Fase 0 ✅ |
 | `crates/faultbox` | servidor HTTP de teste com injeção de falhas (lib + bin) | Fase 0 ✅ |
-| `crates/rajada-engine` | motor de download (biblioteca) | esqueleto |
-| `crates/rajada-store` | journal SQLite | esqueleto |
+| `crates/rajada-engine` | motor de download (biblioteca) | Fase 1.1 ✅ (1 conexão) |
+| `crates/rajada-store` | journal SQLite (WAL) | Fase 1.1 ✅ |
 | `crates/rajada-daemon` | bin `rajadad` | esqueleto |
-| `crates/rajada-cli` | bin `rajada` | esqueleto |
+| `crates/rajada-cli` | bin `rajada` (`rajada get`, usa o motor direto) | Fase 1.1 ✅ |
 | `crates/rajada-tui` | bin `rajada-tui` | esqueleto |
 | `crates/rajada-gtk` | bin `rajada-gtk` (fora de `default-members`) | esqueleto |
 | `crates/rajada-host` | bin `rajada-host` (native messaging) | esqueleto |
@@ -38,9 +38,15 @@ cargo test -p faultbox              # testes do servidor de falhas
 cargo run -p faultbox -- --port 8080
 curl -r 0-99 'http://127.0.0.1:8080/file?size=1048576&seed=1'
 INSTA_UPDATE=always cargo test      # regravar snapshots (revise o diff!)
+RAJADA_CRASH_ITERS=1000 cargo test --release -p rajada-cli   # aceite de crash injection
 ```
 Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_conn=N`,
-`429_above=N&retry_after=S`, `etag_change_at=P` (ver `crates/faultbox/src/lib.rs`).
+`429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html` (ver `crates/faultbox/src/lib.rs`).
+
+## Invariantes do motor (não quebre)
+- `journal.downloaded` só avança **depois** do `fdatasync` do `.part`; na retomada, offset = min(tamanho do `.part`, journal).
+- Retomada sempre com `If-Range` (ETag forte, senão `Last-Modified`). 200 com validador diferente → `NeedsUser(ResourceChanged)`, nunca mistura versões.
+- Destino gravado no journal **antes** do `rename`; `get` repetido com o arquivo final presente → verifica de novo, não duplica (ADR-0003).
 
 ## Regras de código
 - Código, identificadores, comentários e commits em **inglês**. Textos para o usuário em pt-BR **e** en,
@@ -68,3 +74,4 @@ escolher nome/licença definitivos · rodar comandos como root ou que alterem o 
 ## Decisões provisórias (pendentes de confirmação)
 - Licença `MIT OR Apache-2.0`; nome "Rajada"; edição 2024.
 - i18n: `.po` parseado em Rust puro em vez de `gettext-rs` (ADR-0002).
+- `Retry-After` só em segundos (data HTTP ainda não é interpretada; usa backoff).
