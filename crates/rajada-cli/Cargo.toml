@@ -3,10 +3,27 @@ name = "rajada-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Rajada command-line client"
 
 [[bin]]
 name = "rajada"
 path = "src/main.rs"
+
+[dependencies]
+rajada-types.workspace = true
+rajada-i18n.workspace = true
+rajada-engine.workspace = true
+rajada-store.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+faultbox.workspace = true
+tempfile.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true
