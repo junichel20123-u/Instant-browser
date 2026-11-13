@@ -93,3 +93,23 @@ async fn etag_changes_mid_download() {
         expected_sha256(effective_seed(5, 1), 100_000)
     );
 }
+
+#[tokio::test]
+async fn fail_first_then_serves() {
+    let addr = faultbox::spawn().await.unwrap();
+    let path = "/file?size=100&fail_first=2&status=503&retry_after=7";
+    for _ in 0..2 {
+        let r = get(addr, path, &[]).await;
+        assert_eq!(r.status, 503);
+        assert_eq!(header(&r, "retry-after"), "7");
+    }
+    assert_eq!(get(addr, path, &[]).await.status, 200);
+}
+
+#[tokio::test]
+async fn html_interstitial() {
+    let addr = faultbox::spawn().await.unwrap();
+    let r = get(addr, "/file?size=100&html", &[]).await;
+    assert!(header(&r, "content-type").starts_with("text/html"));
+    assert!(r.body.unwrap().starts_with(b"<!DOCTYPE html"));
+}

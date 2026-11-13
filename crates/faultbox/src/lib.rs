@@ -10,6 +10,9 @@
 //!   are in flight.
 //! - `etag_change_at=P`: after P% of the file was served (all responses
 //!   together), the file changes: new content, new ETag.
+//! - `fail_first=N&status=C`: the first `N` requests get status `C`
+//!   (default 503) with `Retry-After` (`retry_after`, default 1).
+//! - `html`: answer with an HTML page instead of the file.
 
 pub mod body;
 mod range;
@@ -38,6 +41,7 @@ struct Shared {
     in_flight: AtomicUsize,
     served: AtomicU64,
     version: AtomicU64,
+    requests: AtomicU64,
 }
 
 /// Decrements the in-flight counter when the response body is dropped.
@@ -60,6 +64,9 @@ struct Scenario {
     limit_429_above: Option<usize>,
     retry_after: u64,
     etag_change_at: Option<u64>,
+    fail_first: Option<u64>,
+    fail_status: u16,
+    html: bool,
 }
 
 impl Scenario {
@@ -79,6 +86,9 @@ impl Scenario {
             limit_429_above: num("429_above")?.map(|n| n as usize),
             retry_after: num("retry_after")?.unwrap_or(1),
             etag_change_at: num("etag_change_at")?,
+            fail_first: num("fail_first")?,
+            fail_status: num("status")?.map_or(503, |c| c as u16),
+            html: q.contains_key("html"),
         })
     }
 }
@@ -126,6 +136,20 @@ async fn serve_file(
     };
     if let Some(ms) = sc.latency_ms {
         tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
+
+    let nth = shared.requests.fetch_add(1, Ordering::SeqCst);
+    if sc.fail_first.is_some_and(|n| nth < n) {
+        let status =
+            StatusCode::from_u16(sc.fail_status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+        let mut r = plain(status, "injected failure");
+        r.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(sc.retry_after));
+        return r;
+    }
+    if sc.html {
+        let page = "<!DOCTYPE html><html><body>Please sign in</body></html>";
+        return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
     }
 
     let guard = InFlight(shared.clone());
