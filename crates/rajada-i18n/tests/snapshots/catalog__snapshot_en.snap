@@ -1,0 +1,44 @@
+---
+source: crates/rajada-i18n/tests/catalog.rs
+expression: "render_all(Locale::En)"
+---
+label Queued: Queued
+label Probing: Checking link
+label Downloading: Downloading
+label Paused: Paused
+label PoliteWait: Waiting for server
+label NeedsUser: Needs you
+label Verifying: Verifying
+label Complete: Done
+label Failed: Failed
+Queued: Queued
+Probing: Checking link
+Downloading: Downloading
+Paused: Paused
+PoliteWait: Waiting for server
+Verifying: Verifying integrity… 43%
+Complete: Verified (hash)
+Complete: Verified (size)
+Complete: Verified (size)
+Complete: Done without verification
+NeedsUser: The link has expired. [Renew link]
+NeedsUser: The site requires a login. [Resend from browser]
+NeedsUser: This link opens a page, not a file. It probably needs a login or confirmation. [Resend from browser]
+NeedsUser: The file changed on the server during the download. [Start over]
+NeedsUser: There is not enough free disk space. [Free up space and resume]
+NeedsUser: No permission to write to this folder. [Choose another folder]
+Failed: Failed: Integrity check failed. The .part file was kept for inspection. [Download the corrupted part again]
+Failed: Failed: The file was not found on the server. [Change address]
+Failed: Failed: The server had an error. [Try again]
+Failed: Failed: The link redirects too many times. [Try again]
+Failed: Failed: No network connection. [Try again]
+Failed: Failed: The address is not valid. [Change address]
+Failed: Failed: Cancelled. [Try again]
+Info: The server limits about 2.0 MiB/s per connection; with 8 connections we reach 15.8 MiB/s.
+Info: Your connection is the bottleneck (about 11.9 MiB/s): the server could deliver more. More connections would not help.
+Warning: The server asked us to wait 30 s (Retry-After). We reduced to 4 connections.
+Problem: The site returned a page (38.0 KiB) instead of the file. It probably needs a login. Resend it from the browser extension.
+Warning: The server does not allow downloading in parts; using one connection. Resuming will not be possible if the connection drops.
+Warning: The delay to the server is high and your system buffer (6.0 MiB) limits the speed; 18.0 MiB would be needed. Suggestion (requires administrator): tune net.ipv4.tcp_rmem.
+Warning: A mirror delivered a different file and was ignored: https://mirror.example/f.iso (hash).
+Info: A connection stalled and its part was handed to another one.

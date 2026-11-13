@@ -1,0 +1,131 @@
+# Rajada — English catalog
+msgid ""
+msgstr ""
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "state.Queued"
+msgstr "Queued"
+
+msgid "state.Probing"
+msgstr "Checking link"
+
+msgid "state.Downloading"
+msgstr "Downloading"
+
+msgid "state.Paused"
+msgstr "Paused"
+
+msgid "state.PoliteWait"
+msgstr "Waiting for server"
+
+msgid "state.NeedsUser"
+msgstr "Needs you"
+
+msgid "state.Verifying"
+msgstr "Verifying"
+
+msgid "state.Complete"
+msgstr "Done"
+
+msgid "state.Failed"
+msgstr "Failed"
+
+msgid "verify.Hash"
+msgstr "Verified (hash)"
+
+msgid "verify.Size"
+msgstr "Verified (size)"
+
+msgid "verify.Unverified"
+msgstr "Done without verification"
+
+msgid "verify.progress"
+msgstr "Verifying integrity… {pct}%"
+
+msgid "needs.UrlExpired"
+msgstr "The link has expired."
+
+msgid "needs.LoginRequired"
+msgstr "The site requires a login."
+
+msgid "needs.HtmlInsteadOfFile"
+msgstr "This link opens a page, not a file. It probably needs a login or confirmation."
+
+msgid "needs.ResourceChanged"
+msgstr "The file changed on the server during the download."
+
+msgid "needs.DiskFull"
+msgstr "There is not enough free disk space."
+
+msgid "needs.PermissionDenied"
+msgstr "No permission to write to this folder."
+
+msgid "fail.VerificationFailed"
+msgstr "Integrity check failed. The .part file was kept for inspection."
+
+msgid "fail.NotFound"
+msgstr "The file was not found on the server."
+
+msgid "fail.ServerError"
+msgstr "The server had an error."
+
+msgid "fail.TooManyRedirects"
+msgstr "The link redirects too many times."
+
+msgid "fail.NetworkUnreachable"
+msgstr "No network connection."
+
+msgid "fail.InvalidUrl"
+msgstr "The address is not valid."
+
+msgid "fail.Cancelled"
+msgstr "Cancelled."
+
+msgid "action.Retry"
+msgstr "Try again"
+
+msgid "action.RenewLink"
+msgstr "Renew link"
+
+msgid "action.ResendFromBrowser"
+msgstr "Resend from browser"
+
+msgid "action.RestartFromScratch"
+msgstr "Start over"
+
+msgid "action.FreeDiskSpace"
+msgstr "Free up space and resume"
+
+msgid "action.ChooseAnotherFolder"
+msgstr "Choose another folder"
+
+msgid "action.ChangeSource"
+msgstr "Change address"
+
+msgid "action.RedownloadCorruptPart"
+msgstr "Download the corrupted part again"
+
+msgid "diag.ServerPerConnectionLimit"
+msgstr "The server limits about {per_conn} per connection; with {conns} connections we reach {total}."
+
+msgid "diag.LinkSaturated"
+msgstr "Your connection is the bottleneck (about {link_est}): the server could deliver more. More connections would not help."
+
+msgid "diag.ServerAskedToWait"
+msgstr "The server asked us to wait {secs} (Retry-After). We reduced to {reduced_to} connections."
+
+msgid "diag.HtmlInsteadOfFile"
+msgstr "The site returned a page ({size}) instead of the file. It probably needs a login. Resend it from the browser extension."
+
+msgid "diag.RangeNotSupported"
+msgstr "The server does not allow downloading in parts; using one connection. Resuming will not be possible if the connection drops."
+
+msgid "diag.BdpExceedsRmem"
+msgstr "The delay to the server is high and your system buffer ({rmem_max}) limits the speed; {bdp} would be needed. Suggestion (requires administrator): tune net.ipv4.tcp_rmem."
+
+msgid "diag.MirrorQuarantined"
+msgstr "A mirror delivered a different file and was ignored: {url} ({why})."
+
+msgid "diag.StalledConnectionReassigned"
+msgstr "A connection stalled and its part was handed to another one."
