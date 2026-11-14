@@ -1,18 +1,22 @@
-//! Single-connection download loop.
+//! Download loop: probing, single-connection streaming and the hand-off
+//! to the segmented runner (see `segmented.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use idb_store::{Journal, Record, ResourceMeta};
+use idb_store::{Journal, Record, ResourceMeta, SegmentRecord};
 use idb_types::{
-    DownloadId, DownloadState, FailReason, HashAlgo, HashSource, NeedsUserReason, VerificationLevel,
+    Diagnostic, DiagnosticCode, DownloadId, DownloadState, FailReason, HashAlgo, HashSource,
+    NeedsUserReason, VerificationLevel,
 };
 use reqwest::{StatusCode, header};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
-use crate::{EngineError, headers, verify};
+use crate::segmented::{self, End, Event, Shared};
+use crate::segments::{self, Segment};
+use crate::{EngineError, disk, headers, verify};
 
 /// Retry behaviour for transient failures.
 #[derive(Debug, Clone)]
@@ -50,7 +54,16 @@ pub struct Config {
     /// Ignore proxy environment variables (used by tests on loopback).
     pub no_proxy: bool,
     pub user_agent: String,
+    /// Parallel connections for servers that support ranges (1 = sequential).
+    pub connections: usize,
+    /// Smallest segment worth its own connection.
+    pub min_segment: u64,
+    /// Free space to keep on the destination filesystem.
+    pub min_free_bytes: u64,
 }
+
+/// Polite ceiling of connections per host (spec §3.3).
+pub const MAX_CONNECTIONS: usize = 8;
 
 impl Default for Config {
     fn default() -> Self {
@@ -63,6 +76,9 @@ impl Default for Config {
             max_redirects: 10,
             no_proxy: false,
             user_agent: format!("idb/{}", env!("CARGO_PKG_VERSION")),
+            connections: 4,
+            min_segment: 1 << 20,
+            min_free_bytes: 0,
         }
     }
 }
@@ -92,6 +108,8 @@ pub struct Outcome {
     pub state: DownloadState,
     /// Final file (when complete) or the kept `.part` file.
     pub path: Option<PathBuf>,
+    /// Doctor findings gathered while downloading.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 pub struct Downloader {
@@ -106,6 +124,8 @@ enum Stop {
     /// Transient problem: retry after the given delay (or backoff).
     Retry(Option<Duration>),
     Final(DownloadState),
+    /// Ranges confirmed: continue in parallel; the response becomes segment 0.
+    Segment(reqwest::Response),
 }
 
 struct Job {
@@ -119,6 +139,7 @@ struct Job {
     durable: u64,
     /// Destination recorded before the rename, if we got that far.
     final_path: Option<PathBuf>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl Job {
@@ -129,7 +150,7 @@ impl Job {
     }
 }
 
-fn io_state(e: &std::io::Error) -> DownloadState {
+pub(crate) fn io_state(e: &std::io::Error) -> DownloadState {
     // ENOSPC = 28, EDQUOT = 122 on Linux.
     match (e.kind(), e.raw_os_error()) {
         (std::io::ErrorKind::PermissionDenied, _) => {
@@ -177,12 +198,12 @@ impl Downloader {
 
     async fn journal<T: Send + 'static>(
         &self,
-        f: impl FnOnce(&Journal) -> idb_store::Result<T> + Send + 'static,
+        f: impl FnOnce(&mut Journal) -> idb_store::Result<T> + Send + 'static,
     ) -> Result<T, EngineError> {
         let j = self.journal.clone();
         let r = tokio::task::spawn_blocking(move || {
-            let guard = j.lock().map_err(|_| idb_store::StoreError::Poisoned)?;
-            f(&guard)
+            let mut guard = j.lock().map_err(|_| idb_store::StoreError::Poisoned)?;
+            f(&mut guard)
         })
         .await?;
         Ok(r?)
@@ -214,6 +235,19 @@ impl Downloader {
             return self.finish(&job, state, Some(dest)).await;
         }
 
+        // A segmented download in progress resumes segment by segment.
+        let id = job.id;
+        let plan = self.journal(move |j| j.segments(id)).await?;
+        if !plan.is_empty() && job.meta.is_some() {
+            if let Some(out) = self
+                .run_segmented(&mut job, plan, None, &mut on_progress)
+                .await?
+            {
+                return Ok(out);
+            }
+            return self.complete(job, &req, &mut on_progress).await;
+        }
+
         let mut failures = 0u32;
         let mut best = job.offset;
         loop {
@@ -222,6 +256,25 @@ impl Downloader {
             match stop {
                 Ok(Stop::Done) => break,
                 Ok(Stop::Final(state)) => return self.finish(&job, state, None).await,
+                Ok(Stop::Segment(resp)) => {
+                    let total = job.meta.as_ref().and_then(|m| m.total).unwrap_or(0);
+                    let plan =
+                        segments::plan(total, self.config.connections, self.config.min_segment)
+                            .into_iter()
+                            .map(|s| SegmentRecord {
+                                start: s.start,
+                                end: s.end,
+                                done: 0,
+                            })
+                            .collect();
+                    if let Some(out) = self
+                        .run_segmented(&mut job, plan, Some(resp), &mut on_progress)
+                        .await?
+                    {
+                        return Ok(out);
+                    }
+                    return self.complete(job, &req, &mut on_progress).await;
+                }
                 Ok(Stop::Retry(server_delay)) => {
                     self.checkpoint(&mut job).await?;
                     if job.offset > best {
@@ -258,6 +311,16 @@ impl Downloader {
             }
         }
 
+        self.complete(job, &req, &mut on_progress).await
+    }
+
+    /// Verification and atomic publication, shared by every download mode.
+    async fn complete(
+        &self,
+        mut job: Job,
+        req: &Request,
+        on_progress: &mut (impl FnMut(Progress) + Send),
+    ) -> Result<Outcome, EngineError> {
         on_progress(self.progress(&job, DownloadState::Verifying { permille: 0 }));
         self.checkpoint(&mut job).await?;
         let Some(part) = job.part_path() else {
@@ -309,6 +372,7 @@ impl Downloader {
                 offset: 0,
                 durable: 0,
                 final_path: rec.final_path.map(PathBuf::from),
+                diagnostics: Vec::new(),
             };
             if let Some(part) = job.part_path() {
                 let len = tokio::fs::metadata(&part).await.map_or(0, |m| m.len());
@@ -329,6 +393,7 @@ impl Downloader {
             offset: 0,
             durable: 0,
             final_path: None,
+            diagnostics: Vec::new(),
         })
     }
 
@@ -342,16 +407,7 @@ impl Downloader {
     }
 
     fn backoff(&self, failures: u32) -> Duration {
-        let p = &self.config.retry;
-        let exp = p
-            .base_delay
-            .saturating_mul(1u32 << failures.min(16).saturating_sub(1));
-        let capped = exp.min(p.max_delay);
-        // Up to 25% jitter, without an RNG dependency.
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.subsec_nanos());
-        capped + capped.mul_f64(f64::from(nanos % 1000) / 4000.0)
+        backoff(&self.config.retry, failures)
     }
 
     /// Makes progress durable: fdatasync the part file, then record it.
@@ -382,6 +438,7 @@ impl Downloader {
             id: job.id,
             state,
             path,
+            diagnostics: job.diagnostics.clone(),
         })
     }
 
@@ -522,8 +579,73 @@ impl Downloader {
                 .await
                 .map_err(std::io::Error::other)?;
             job.meta = Some(meta);
+
+            if let Some(t) = total
+                && !disk::has_room(&job.dir, t, self.config.min_free_bytes)?
+            {
+                return Ok(Stop::Final(DownloadState::NeedsUser(
+                    NeedsUserReason::DiskFull,
+                )));
+            }
+            if let Some(stop) = self.decide_segmentation(job, status, total).await {
+                return Ok(match stop {
+                    true => Stop::Segment(resp),
+                    false => {
+                        job.diagnostics
+                            .push(DiagnosticCode::RangeNotSupported.into());
+                        self.stream_single(job, resp, start, on_progress).await?
+                    }
+                });
+            }
         }
 
+        self.stream_single(job, resp, start, on_progress).await
+    }
+
+    /// Whether to go parallel. `None`: not applicable (one connection asked,
+    /// unknown or small size). `Some(true)`: ranges confirmed. `Some(false)`:
+    /// the server does not support ranges.
+    async fn decide_segmentation(
+        &self,
+        job: &Job,
+        status: StatusCode,
+        total: Option<u64>,
+    ) -> Option<bool> {
+        let total = total?;
+        if self.config.connections < 2 || total < 2 * self.config.min_segment {
+            return None;
+        }
+        if status == StatusCode::PARTIAL_CONTENT {
+            return Some(true);
+        }
+        // 200 without proof of range support: ask for one byte in the middle
+        // (servers that support ranges without announcing them, Gopeed #1652).
+        let mid = total / 2;
+        let probe = self
+            .client
+            .get(&job.url)
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(header::RANGE, format!("bytes={mid}-{mid}"))
+            .send()
+            .await
+            .ok()?;
+        let exact = probe.status() == StatusCode::PARTIAL_CONTENT
+            && probe
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(headers::content_range)
+                == Some((mid, mid, Some(total)));
+        Some(exact)
+    }
+
+    async fn stream_single(
+        &self,
+        job: &mut Job,
+        resp: reqwest::Response,
+        start: u64,
+        on_progress: &mut (impl FnMut(Progress) + Send),
+    ) -> std::io::Result<Stop> {
         let Some(part) = job.part_path() else {
             return Ok(Stop::Final(DownloadState::Failed(FailReason::ServerError)));
         };
@@ -581,6 +703,153 @@ impl Downloader {
         Ok(Stop::Done)
     }
 
+    /// Runs the segment workers. Returns `Some(outcome)` when the download
+    /// stopped in a final state, `None` when every byte is on disk.
+    async fn run_segmented(
+        &self,
+        job: &mut Job,
+        mut plan: Vec<SegmentRecord>,
+        first: Option<reqwest::Response>,
+        on_progress: &mut (impl FnMut(Progress) + Send),
+    ) -> Result<Option<Outcome>, EngineError> {
+        let (Some(meta), Some(part)) = (job.meta.clone(), job.part_path()) else {
+            return Ok(Some(
+                self.finish(job, DownloadState::Failed(FailReason::ServerError), None)
+                    .await?,
+            ));
+        };
+        let total = meta.total.unwrap_or(0);
+        let fresh = first.is_some();
+
+        // Open the part file; on resume, never trust bytes the file lacks.
+        let path = part.clone();
+        let opened =
+            tokio::task::spawn_blocking(move || -> std::io::Result<(std::fs::File, u64)> {
+                let f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .read(true)
+                    .write(true)
+                    .open(&path)?;
+                if fresh {
+                    f.set_len(0)?;
+                }
+                let len = f.metadata()?.len();
+                Ok((f, len))
+            })
+            .await?;
+        let (file, len) = match opened {
+            Ok(v) => v,
+            Err(e) => return Ok(Some(self.finish(job, io_state(&e), None).await?)),
+        };
+        for s in &mut plan {
+            s.done = s.done.min(len.saturating_sub(s.start)).min(s.end - s.start);
+        }
+        let file = Arc::new(file);
+        if fresh {
+            let (id, p) = (job.id, plan.clone());
+            self.journal(move |j| j.set_segments(id, &p)).await?;
+            // Reserve space in the background; writes may start meanwhile.
+            let f = file.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = disk::preallocate(&f, total) {
+                    tracing::warn!("preallocation failed: {e}");
+                }
+            });
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let shared = Arc::new(Shared {
+            client: self.client.clone(),
+            url: job.url.clone(),
+            if_range: strong_etag(&meta)
+                .map(str::to_owned)
+                .or_else(|| meta.last_modified.clone()),
+            strong_etag: strong_etag(&meta).map(str::to_owned),
+            total,
+            file,
+            segs: plan
+                .iter()
+                .map(|s| Segment {
+                    start: s.start,
+                    end: s.end,
+                })
+                .collect(),
+            done: plan
+                .iter()
+                .map(|s| std::sync::atomic::AtomicU64::new(s.done))
+                .collect(),
+            retry: self.config.retry.clone(),
+            events: tx,
+        });
+        tracing::info!(id = job.id.0, segments = plan.len(), "segmented download");
+
+        let mut workers = tokio::task::JoinSet::new();
+        let mut first = first.map(|r| (r, 0u64));
+        for i in 0..plan.len() {
+            workers.spawn(segmented::worker(
+                shared.clone(),
+                i,
+                if i == 0 { first.take() } else { None },
+            ));
+        }
+        drop(first);
+
+        let mut durable = shared.snapshot();
+        let mut tick = tokio::time::interval(self.config.checkpoint_interval);
+        let end = loop {
+            tokio::select! {
+                joined = workers.join_next() => match joined {
+                    None => break None,
+                    Some(Ok(End::Done)) => {}
+                    Some(Ok(End::Final(state))) => break Some(state),
+                    Some(Ok(End::GaveUp)) => {
+                        break Some(DownloadState::Failed(FailReason::NetworkUnreachable));
+                    }
+                    Some(Err(e)) => {
+                        workers.abort_all();
+                        return Err(e.into());
+                    }
+                },
+                _ = tick.tick() => {
+                    durable = self.checkpoint_segments(job, &shared, durable).await?;
+                    job.offset = shared.written();
+                    on_progress(self.progress(job, DownloadState::Downloading));
+                }
+                Some(Event::PoliteWait { until_unix_secs }) = rx.recv() => {
+                    on_progress(self.progress(job, DownloadState::PoliteWait { until_unix_secs }));
+                }
+            }
+        };
+        workers.abort_all();
+        while workers.join_next().await.is_some() {}
+        self.checkpoint_segments(job, &shared, durable).await?;
+        job.offset = shared.written();
+        job.durable = job.offset;
+        match end {
+            None => Ok(None),
+            Some(state) => Ok(Some(self.finish(job, state, Some(part)).await?)),
+        }
+    }
+
+    /// fdatasync, then record each segment's progress (never the reverse).
+    async fn checkpoint_segments(
+        &self,
+        job: &Job,
+        shared: &Arc<Shared>,
+        durable: Vec<u64>,
+    ) -> Result<Vec<u64>, EngineError> {
+        let snap = shared.snapshot();
+        if snap == durable {
+            return Ok(durable);
+        }
+        let f = shared.file.clone();
+        tokio::task::spawn_blocking(move || f.sync_data()).await??;
+        let (id, s) = (job.id, snap.clone());
+        self.journal(move |j| j.checkpoint(id, &s)).await?;
+        Ok(snap)
+    }
+
     async fn verify(
         &self,
         job: &Job,
@@ -629,4 +898,16 @@ async fn open_part(path: &Path, start: u64) -> std::io::Result<File> {
     f.set_len(start).await?;
     f.seek(std::io::SeekFrom::Start(start)).await?;
     Ok(f)
+}
+
+/// Exponential backoff with up to 25% jitter, without an RNG dependency.
+pub(crate) fn backoff(p: &RetryPolicy, failures: u32) -> Duration {
+    let exp = p
+        .base_delay
+        .saturating_mul(1u32 << failures.min(16).saturating_sub(1));
+    let capped = exp.min(p.max_delay);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    capped + capped.mul_f64(f64::from(nanos % 1000) / 4000.0)
 }

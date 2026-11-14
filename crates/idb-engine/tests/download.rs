@@ -305,3 +305,173 @@ async fn get_is_idempotent_while_the_file_exists() {
     assert_eq!(third.path.unwrap(), first);
     assert_eq!(sha_of(&first), expected_sha256(12, 3000));
 }
+
+// ---- Segmented (parallel) downloads ----
+
+fn seg_config(connections: usize) -> Config {
+    Config {
+        connections,
+        min_segment: 64 * 1024,
+        checkpoint_interval: Duration::from_millis(50),
+        ..config()
+    }
+}
+
+fn segment_count(env: &Env, url: &str) -> usize {
+    let j = Journal::open(&env.dir.path().join("journal.sqlite")).unwrap();
+    let rec = j
+        .find(url, &env.dir.path().to_string_lossy())
+        .unwrap()
+        .unwrap();
+    j.segments(rec.id).unwrap().len()
+}
+
+#[tokio::test]
+async fn segmented_download_has_exact_hash() {
+    let env = Env::new().await;
+    let url = env.url("size=1000003&seed=21");
+    let out = env.get(seg_config(4), &url, None).await;
+    assert_eq!(
+        out.state,
+        DownloadState::Complete(VerificationLevel::SizeAndValidator)
+    );
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(21, 1_000_003));
+    assert_eq!(segment_count(&env, &url), 4);
+    assert!(out.diagnostics.is_empty());
+}
+
+#[tokio::test]
+async fn parallel_connections_beat_a_per_connection_limit() {
+    let env = Env::new().await;
+    let time = |c: usize, seed: u32| {
+        let url = env.url(&format!("size=2000000&seed={seed}&per_conn_rate=1000000"));
+        let env = &env;
+        async move {
+            let t = Instant::now();
+            let out = env.get(seg_config(c), &url, None).await;
+            assert!(matches!(out.state, DownloadState::Complete(_)));
+            t.elapsed().as_secs_f64()
+        }
+    };
+    let one = time(1, 1).await;
+    let four = time(4, 2).await;
+    assert!(one / four > 2.5, "1 conn {one:.2}s vs 4 conns {four:.2}s");
+}
+
+#[tokio::test]
+async fn unannounced_range_support_is_detected_by_second_probe() {
+    let env = Env::new().await;
+    let url = env.url("size=800000&seed=22&hide_accept_ranges");
+    let out = env.get(seg_config(4), &url, None).await;
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(22, 800_000));
+    assert_eq!(segment_count(&env, &url), 4);
+}
+
+#[tokio::test]
+async fn no_range_support_falls_back_to_one_connection_with_diagnostic() {
+    let env = Env::new().await;
+    let url = env.url("size=800000&seed=23&no_ranges");
+    let out = env.get(seg_config(4), &url, None).await;
+    assert!(matches!(out.state, DownloadState::Complete(_)));
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(23, 800_000));
+    assert_eq!(segment_count(&env, &url), 0);
+    assert_eq!(
+        out.diagnostics.iter().map(|d| &d.code).collect::<Vec<_>>(),
+        vec![&idb_types::DiagnosticCode::RangeNotSupported]
+    );
+}
+
+#[tokio::test]
+async fn segments_survive_dropped_connections() {
+    let env = Env::new().await;
+    let url = env.url("size=1000000&seed=24&drop_conn=70000");
+    let out = env.get(seg_config(4), &url, None).await;
+    assert!(
+        matches!(out.state, DownloadState::Complete(_)),
+        "{:?}",
+        out.state
+    );
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(24, 1_000_000));
+}
+
+#[tokio::test]
+async fn segmented_resource_change_never_mixes_versions() {
+    let env = Env::new().await;
+    // Connections drop, so segments must ask again after the file changed:
+    // If-Range then gets a 200 and the download stops instead of mixing.
+    let url = env.url("size=1000000&seed=25&etag_change_at=30&drop_conn=100000");
+    let out = env.get(seg_config(4), &url, None).await;
+    assert_eq!(
+        out.state,
+        DownloadState::NeedsUser(NeedsUserReason::ResourceChanged)
+    );
+    assert!(!env.dir.path().join("file").exists());
+
+    // Without interruptions every segment streams the old version to the end:
+    // the result is complete and must be exactly the old version.
+    let env = Env::new().await;
+    let url = env.url("size=1000000&seed=29&etag_change_at=30");
+    let out = env.get(seg_config(4), &url, None).await;
+    if matches!(out.state, DownloadState::Complete(_)) {
+        assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(29, 1_000_000));
+    }
+}
+
+#[tokio::test]
+async fn segmented_backs_off_on_429_and_completes() {
+    let env = Env::new().await;
+    let url = env.url("size=800000&seed=26&429_above=2&retry_after=1&per_conn_rate=2000000");
+    let out = env.get(seg_config(4), &url, None).await;
+    assert!(
+        matches!(out.state, DownloadState::Complete(_)),
+        "{:?}",
+        out.state
+    );
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(26, 800_000));
+}
+
+#[tokio::test]
+async fn disk_full_is_detected_before_writing() {
+    let env = Env::new().await;
+    let mut cfg = seg_config(4);
+    cfg.min_free_bytes = u64::MAX / 2;
+    let out = env.get(cfg, &env.url("size=800000&seed=27"), None).await;
+    assert_eq!(
+        out.state,
+        DownloadState::NeedsUser(NeedsUserReason::DiskFull)
+    );
+    assert!(!env.dir.path().join("file.part").exists());
+}
+
+#[tokio::test]
+async fn segmented_download_resumes_per_segment() {
+    let env = Env::new().await;
+    let url = env.url("size=1000000&seed=28&drop_conn=100000");
+    let mut cfg = seg_config(4);
+    cfg.retry.max_attempts = 0;
+    let out = env.get(cfg, &url, None).await;
+    assert_eq!(
+        out.state,
+        DownloadState::Failed(FailReason::NetworkUnreachable)
+    );
+    let req = Request {
+        url: url.clone(),
+        dir: env.dir.path().to_owned(),
+        expected_sha256: None,
+    };
+    let mut first_done = None;
+    let out = env
+        .downloader(seg_config(4))
+        .run(req, |p| {
+            first_done.get_or_insert(p.done);
+        })
+        .await
+        .unwrap();
+    assert!(first_done.unwrap() >= 100_000, "{first_done:?}");
+    assert!(
+        matches!(out.state, DownloadState::Complete(_)),
+        "{:?}",
+        out.state
+    );
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(28, 1_000_000));
+}

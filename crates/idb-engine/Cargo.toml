@@ -13,6 +13,8 @@ tokio.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+rustix.workspace = true
+bytes.workspace = true
 
 [dev-dependencies]
 faultbox.workspace = true
