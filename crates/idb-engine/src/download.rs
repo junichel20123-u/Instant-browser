@@ -14,8 +14,10 @@ use reqwest::{StatusCode, header};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
+use crate::controller::{Controller, Decision, Mode};
 use crate::segmented::{self, End, Event, Shared};
-use crate::segments::{self, Segment};
+use crate::segments;
+use crate::workmap::WorkMap;
 use crate::{EngineError, disk, headers, verify};
 
 /// Retry behaviour for transient failures.
@@ -54,8 +56,10 @@ pub struct Config {
     /// Ignore proxy environment variables (used by tests on loopback).
     pub no_proxy: bool,
     pub user_agent: String,
-    /// Parallel connections for servers that support ranges (1 = sequential).
-    pub connections: usize,
+    /// How many parallel connections to use when the server allows ranges.
+    pub connections: Mode,
+    /// A connection that receives nothing for this long is replaced.
+    pub stall_timeout: Duration,
     /// Smallest segment worth its own connection.
     pub min_segment: u64,
     /// Free space to keep on the destination filesystem.
@@ -76,7 +80,10 @@ impl Default for Config {
             max_redirects: 10,
             no_proxy: false,
             user_agent: format!("idb/{}", env!("CARGO_PKG_VERSION")),
-            connections: 4,
+            connections: Mode::Auto {
+                max: MAX_CONNECTIONS,
+            },
+            stall_timeout: Duration::from_secs(20),
             min_segment: 1 << 20,
             min_free_bytes: 0,
         }
@@ -110,7 +117,22 @@ pub struct Outcome {
     pub path: Option<PathBuf>,
     /// Doctor findings gathered while downloading.
     pub diagnostics: Vec<Diagnostic>,
+    pub stats: Stats,
 }
+
+/// Measurements of a segmented run (for `--json` and benchmarks).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Time until the rate first reached 90% of the best measured rate.
+    pub ramp_ms: Option<u64>,
+    /// Connection target when the download ended.
+    pub connections: u32,
+    /// Best smoothed rate seen, in bytes/s.
+    pub peak_rate: u64,
+}
+
+/// Measurement window of the adaptive controller (spec §7.6).
+const WINDOW: Duration = Duration::from_millis(500);
 
 pub struct Downloader {
     client: reqwest::Client,
@@ -140,6 +162,7 @@ struct Job {
     /// Destination recorded before the rename, if we got that far.
     final_path: Option<PathBuf>,
     diagnostics: Vec<Diagnostic>,
+    stats: Stats,
 }
 
 impl Job {
@@ -240,7 +263,7 @@ impl Downloader {
         let plan = self.journal(move |j| j.segments(id)).await?;
         if !plan.is_empty() && job.meta.is_some() {
             if let Some(out) = self
-                .run_segmented(&mut job, plan, None, &mut on_progress)
+                .run_segmented(&mut job, Some(plan), None, &mut on_progress)
                 .await?
             {
                 return Ok(out);
@@ -257,18 +280,8 @@ impl Downloader {
                 Ok(Stop::Done) => break,
                 Ok(Stop::Final(state)) => return self.finish(&job, state, None).await,
                 Ok(Stop::Segment(resp)) => {
-                    let total = job.meta.as_ref().and_then(|m| m.total).unwrap_or(0);
-                    let plan =
-                        segments::plan(total, self.config.connections, self.config.min_segment)
-                            .into_iter()
-                            .map(|s| SegmentRecord {
-                                start: s.start,
-                                end: s.end,
-                                done: 0,
-                            })
-                            .collect();
                     if let Some(out) = self
-                        .run_segmented(&mut job, plan, Some(resp), &mut on_progress)
+                        .run_segmented(&mut job, None, Some(resp), &mut on_progress)
                         .await?
                     {
                         return Ok(out);
@@ -373,6 +386,7 @@ impl Downloader {
                 durable: 0,
                 final_path: rec.final_path.map(PathBuf::from),
                 diagnostics: Vec::new(),
+                stats: Stats::default(),
             };
             if let Some(part) = job.part_path() {
                 let len = tokio::fs::metadata(&part).await.map_or(0, |m| m.len());
@@ -394,6 +408,7 @@ impl Downloader {
             durable: 0,
             final_path: None,
             diagnostics: Vec::new(),
+            stats: Stats::default(),
         })
     }
 
@@ -439,6 +454,7 @@ impl Downloader {
             state,
             path,
             diagnostics: job.diagnostics.clone(),
+            stats: job.stats.clone(),
         })
     }
 
@@ -612,11 +628,17 @@ impl Downloader {
         total: Option<u64>,
     ) -> Option<bool> {
         let total = total?;
-        if self.config.connections < 2 || total < 2 * self.config.min_segment {
+        if total == 0 {
             return None;
         }
+        // A 206 proves range support: even one connection then uses the
+        // segmented writer (resumable, 256 KiB pwrite batches).
         if status == StatusCode::PARTIAL_CONTENT {
             return Some(true);
+        }
+        let parallel = !matches!(self.config.connections, Mode::Fixed(1));
+        if !parallel || total < 2 * self.config.min_segment {
+            return None;
         }
         // 200 without proof of range support: ask for one byte in the middle
         // (servers that support ranges without announcing them, Gopeed #1652).
@@ -649,7 +671,9 @@ impl Downloader {
         let Some(part) = job.part_path() else {
             return Ok(Stop::Final(DownloadState::Failed(FailReason::ServerError)));
         };
-        let mut file = open_part(&part, start).await?;
+        let file = open_part(&part, start).await?;
+        // Batch small network chunks into 256 KiB writes (CPU, spec §7.4).
+        let mut file = tokio::io::BufWriter::with_capacity(segmented::WRITE_BUF, file);
         job.offset = start;
         if start < job.durable {
             let id = job.id;
@@ -664,7 +688,7 @@ impl Downloader {
     async fn stream_body(
         &self,
         mut resp: reqwest::Response,
-        file: &mut File,
+        file: &mut tokio::io::BufWriter<File>,
         job: &mut Job,
         on_progress: &mut (impl FnMut(Progress) + Send),
     ) -> std::io::Result<Stop> {
@@ -703,12 +727,13 @@ impl Downloader {
         Ok(Stop::Done)
     }
 
-    /// Runs the segment workers. Returns `Some(outcome)` when the download
-    /// stopped in a final state, `None` when every byte is on disk.
+    /// Runs the segmented download. `resume` holds the journal's segment map,
+    /// `first` the probe response (fresh start). Returns `Some(outcome)` when
+    /// the download stopped in a final state, `None` when every byte is on disk.
     async fn run_segmented(
         &self,
         job: &mut Job,
-        mut plan: Vec<SegmentRecord>,
+        resume: Option<Vec<SegmentRecord>>,
         first: Option<reqwest::Response>,
         on_progress: &mut (impl FnMut(Progress) + Send),
     ) -> Result<Option<Outcome>, EngineError> {
@@ -719,7 +744,7 @@ impl Downloader {
             ));
         };
         let total = meta.total.unwrap_or(0);
-        let fresh = first.is_some();
+        let fresh = resume.is_none();
 
         // Open the part file; on resume, never trust bytes the file lacks.
         let path = part.clone();
@@ -742,12 +767,22 @@ impl Downloader {
             Ok(v) => v,
             Err(e) => return Ok(Some(self.finish(job, io_state(&e), None).await?)),
         };
-        for s in &mut plan {
-            s.done = s.done.min(len.saturating_sub(s.start)).min(s.end - s.start);
-        }
+        let min = self.config.min_segment;
+        let mut map = match resume {
+            Some(mut recs) => {
+                for r in &mut recs {
+                    r.done = r.done.min(len.saturating_sub(r.start)).min(r.end - r.start);
+                }
+                WorkMap::from_records(&recs, min)
+            }
+            None => match self.config.connections {
+                Mode::Fixed(n) => WorkMap::with_plan(&segments::plan(total, n, min), min),
+                Mode::Auto { .. } => WorkMap::new(total, min),
+            },
+        };
         let file = Arc::new(file);
         if fresh {
-            let (id, p) = (job.id, plan.clone());
+            let (id, p) = (job.id, map.snapshot());
             self.journal(move |j| j.set_segments(id, &p)).await?;
             // Reserve space in the background; writes may start meanwhile.
             let f = file.clone();
@@ -758,7 +793,7 @@ impl Downloader {
             });
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let shared = Arc::new(Shared {
             client: self.client.clone(),
             url: job.url.clone(),
@@ -768,85 +803,173 @@ impl Downloader {
             strong_etag: strong_etag(&meta).map(str::to_owned),
             total,
             file,
-            segs: plan
-                .iter()
-                .map(|s| Segment {
-                    start: s.start,
-                    end: s.end,
-                })
-                .collect(),
-            done: plan
-                .iter()
-                .map(|s| std::sync::atomic::AtomicU64::new(s.done))
-                .collect(),
-            retry: self.config.retry.clone(),
+            received: std::sync::atomic::AtomicU64::new(0),
             events: tx,
         });
-        tracing::info!(id = job.id.0, segments = plan.len(), "segmented download");
 
+        let mut ctl = Controller::new(self.config.connections);
         let mut workers = tokio::task::JoinSet::new();
-        let mut first = first.map(|r| (r, 0u64));
-        for i in 0..plan.len() {
-            workers.spawn(segmented::worker(
-                shared.clone(),
-                i,
-                if i == 0 { first.take() } else { None },
-            ));
+        type Task = (Arc<crate::workmap::Lease>, tokio::task::AbortHandle);
+        let mut tasks: std::collections::HashMap<tokio::task::Id, Task> =
+            std::collections::HashMap::new();
+        let mut first = first;
+        // The probe response continues as the worker of the first lease.
+        if let Some(resp) = first.take()
+            && let Some(lease) = map.assign()
+        {
+            let h = workers.spawn(segmented::worker(shared.clone(), lease.clone(), Some(resp)));
+            tasks.insert(h.id(), (lease, h));
         }
-        drop(first);
 
-        let mut durable = shared.snapshot();
+        let started = tokio::time::Instant::now();
+        let mut paused_until = started;
+        let mut failures = 0u32;
+        let mut best_written = map.written();
+        let mut last_received = 0u64;
+        let mut rates: Vec<(Duration, f64)> = Vec::new();
+        let mut durable = map.snapshot();
+        let mut window = tokio::time::interval(WINDOW);
         let mut tick = tokio::time::interval(self.config.checkpoint_interval);
+        window.tick().await;
+
         let end = loop {
+            // Match the number of busy connections to the controller's target.
+            if tokio::time::Instant::now() >= paused_until {
+                while busy(&map) < ctl.target() {
+                    let Some(lease) = map.assign() else { break };
+                    let h = workers.spawn(segmented::worker(shared.clone(), lease.clone(), None));
+                    tasks.insert(h.id(), (lease, h));
+                }
+            }
+            while busy(&map) > ctl.target() {
+                let Some(lease) = map.largest_unreceived() else {
+                    break;
+                };
+                if !map.park(&lease) {
+                    break;
+                }
+            }
+            // With nothing running and work left we are paused: the select
+            // below wakes up when the pause ends (or on the next tick).
+            if workers.is_empty() && map.is_complete() {
+                break None;
+            }
+
             tokio::select! {
-                joined = workers.join_next() => match joined {
-                    None => break None,
-                    Some(Ok(End::Done)) => {}
-                    Some(Ok(End::Final(state))) => break Some(state),
-                    Some(Ok(End::GaveUp)) => {
-                        break Some(DownloadState::Failed(FailReason::NetworkUnreachable));
+                joined = workers.join_next_with_id(), if !workers.is_empty() => {
+                    let (id, ended) = match joined {
+                        Some(Ok((id, ended))) => (id, ended),
+                        Some(Err(e)) if e.is_cancelled() => continue,
+                        Some(Err(e)) => {
+                            workers.abort_all();
+                            return Err(e.into());
+                        }
+                        None => continue,
+                    };
+                    if let Some((lease, _)) = tasks.remove(&id) {
+                        map.release(&lease);
                     }
-                    Some(Err(e)) => {
-                        workers.abort_all();
-                        return Err(e.into());
+                    match ended {
+                        End::Done => {}
+                        End::Final(state) => break Some(state),
+                        End::Retry { delay, throttled } => {
+                            let written = map.written();
+                            if written > best_written {
+                                best_written = written;
+                                failures = 0;
+                            }
+                            failures += 1;
+                            if failures > self.config.retry.max_attempts {
+                                break Some(DownloadState::Failed(FailReason::NetworkUnreachable));
+                            }
+                            let wait = if throttled {
+                                let d = delay.unwrap_or_else(|| backoff(&self.config.retry, failures))
+                                    .min(self.config.retry.max_retry_after);
+                                // Explained by ServerAskedToWait below.
+                                let _ = ctl.on_throttle();
+                                job.diagnostics.push(DiagnosticCode::ServerAskedToWait {
+                                    secs: d.as_secs(),
+                                    reduced_to: ctl.target() as u32,
+                                }.into());
+                                job.offset = map.written();
+                                on_progress(self.progress(job, DownloadState::PoliteWait {
+                                    until_unix_secs: unix_now_plus(d),
+                                }));
+                                d
+                            } else {
+                                backoff(&self.config.retry, failures)
+                            };
+                            paused_until = paused_until.max(tokio::time::Instant::now() + wait);
+                        }
                     }
-                },
+                }
+                _ = window.tick() => {
+                    let received = shared.received.load(std::sync::atomic::Ordering::Relaxed);
+                    let bytes = received - last_received;
+                    last_received = received;
+                    if let Some(dec) = ctl.on_window(bytes, WINDOW) {
+                        push_decision(job, dec);
+                        if dec.settled && matches!(self.config.connections, Mode::Auto { .. }) {
+                            job.diagnostics.push(settled_diagnostic(dec.to, dec.rate));
+                        }
+                    }
+                    rates.push((started.elapsed(), bytes as f64 / WINDOW.as_secs_f64()));
+                    // Watchdog: a connection that receives nothing is replaced.
+                    let stalled: Vec<_> = tasks
+                        .iter()
+                        .filter(|(_, (l, _))| !l.is_finished() && l.idle_for() > self.config.stall_timeout)
+                        .map(|(id, _)| *id)
+                        .collect();
+                    for id in stalled {
+                        if let Some((lease, handle)) = tasks.remove(&id) {
+                            handle.abort();
+                            tracing::warn!(start = lease.start, "stalled connection reassigned");
+                            map.release(&lease);
+                            job.diagnostics
+                                .push(DiagnosticCode::StalledConnectionReassigned.into());
+                        }
+                    }
+                }
                 _ = tick.tick() => {
-                    durable = self.checkpoint_segments(job, &shared, durable).await?;
-                    job.offset = shared.written();
+                    durable = self.checkpoint_map(job, &shared, &map, durable).await?;
+                    job.offset = map.written();
                     on_progress(self.progress(job, DownloadState::Downloading));
                 }
-                Some(Event::PoliteWait { until_unix_secs }) = rx.recv() => {
-                    on_progress(self.progress(job, DownloadState::PoliteWait { until_unix_secs }));
-                }
+                Some(Event::Rtt(d)) = rx.recv() => ctl.rtt_sample(d),
+                _ = tokio::time::sleep_until(paused_until), if tokio::time::Instant::now() < paused_until => {}
             }
         };
         workers.abort_all();
         while workers.join_next().await.is_some() {}
-        self.checkpoint_segments(job, &shared, durable).await?;
-        job.offset = shared.written();
+        for (lease, _) in tasks.values() {
+            map.release(lease);
+        }
+        self.checkpoint_map(job, &shared, &map, durable).await?;
+        job.offset = map.written();
         job.durable = job.offset;
+        job.stats = stats(&rates, &ctl);
         match end {
             None => Ok(None),
             Some(state) => Ok(Some(self.finish(job, state, Some(part)).await?)),
         }
     }
 
-    /// fdatasync, then record each segment's progress (never the reverse).
-    async fn checkpoint_segments(
+    /// Snapshot, fdatasync, then record the map (never the reverse).
+    async fn checkpoint_map(
         &self,
         job: &Job,
         shared: &Arc<Shared>,
-        durable: Vec<u64>,
-    ) -> Result<Vec<u64>, EngineError> {
-        let snap = shared.snapshot();
+        map: &WorkMap,
+        durable: Vec<SegmentRecord>,
+    ) -> Result<Vec<SegmentRecord>, EngineError> {
+        let snap = map.snapshot();
         if snap == durable {
             return Ok(durable);
         }
         let f = shared.file.clone();
         tokio::task::spawn_blocking(move || f.sync_data()).await??;
         let (id, s) = (job.id, snap.clone());
-        self.journal(move |j| j.checkpoint(id, &s)).await?;
+        self.journal(move |j| j.checkpoint_map(id, &s)).await?;
         Ok(snap)
     }
 
@@ -910,4 +1033,60 @@ pub(crate) fn backoff(p: &RetryPolicy, failures: u32) -> Duration {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
     capped + capped.mul_f64(f64::from(nanos % 1000) / 4000.0)
+}
+
+/// Leases that still expect bytes from the network (parked ones do not).
+fn busy(map: &WorkMap) -> usize {
+    map.owned().filter(|l| l.unreceived() > 0).count()
+}
+
+fn unix_now_plus(d: Duration) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |n| (n + d).as_secs())
+}
+
+fn push_decision(job: &mut Job, d: Decision) {
+    // The first step is a trial, not a measured decision: nothing to explain.
+    if !d.measured {
+        return;
+    }
+    job.diagnostics.push(
+        DiagnosticCode::ConnectionsAdjusted {
+            from: d.from as u32,
+            to: d.to as u32,
+            gain_pct: d.gain_pct,
+        }
+        .into(),
+    );
+}
+
+/// Explains where the controller settled (spec §7.15).
+fn settled_diagnostic(conns: usize, rate: f64) -> Diagnostic {
+    let total = idb_types::BytesPerSec(rate as u64);
+    if conns > 2 {
+        DiagnosticCode::ServerPerConnectionLimit {
+            per_conn: idb_types::BytesPerSec((rate / conns as f64) as u64),
+            conns: conns as u32,
+            total,
+        }
+        .into()
+    } else {
+        DiagnosticCode::LinkSaturated { link_est: total }.into()
+    }
+}
+
+fn stats(rates: &[(Duration, f64)], ctl: &Controller) -> Stats {
+    // Ignore the last window: it is usually cut short by the end of the file.
+    let full = &rates[..rates.len().saturating_sub(1)];
+    let best = full.iter().map(|(_, r)| *r).fold(0.0, f64::max);
+    let ramp = full
+        .iter()
+        .find(|(_, r)| best > 0.0 && *r >= 0.9 * best)
+        .map(|(t, _)| t.as_millis() as u64);
+    Stats {
+        ramp_ms: ramp,
+        connections: ctl.target() as u32,
+        peak_rate: ctl.best_rate() as u64,
+    }
 }

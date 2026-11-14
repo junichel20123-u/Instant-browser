@@ -4,14 +4,19 @@
 //! with `If-Range`, retries with backoff and `Retry-After`, and final
 //! verification before an atomic rename.
 
+mod controller;
 mod disk;
 mod download;
 pub mod headers;
 mod segmented;
 pub mod segments;
 mod verify;
+mod workmap;
 
-pub use download::{Config, Downloader, MAX_CONNECTIONS, Outcome, Progress, Request, RetryPolicy};
+pub use controller::Mode as Connections;
+pub use download::{
+    Config, Downloader, MAX_CONNECTIONS, Outcome, Progress, Request, RetryPolicy, Stats,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

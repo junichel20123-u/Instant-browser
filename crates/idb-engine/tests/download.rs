@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use faultbox::{effective_seed, expected_sha256};
-use idb_engine::{Config, Downloader, Outcome, Request, RetryPolicy};
+use idb_engine::{Config, Connections, Downloader, Outcome, Request, RetryPolicy};
 use idb_store::Journal;
 use idb_types::{
     DownloadState, FailReason, HashAlgo, HashSource, NeedsUserReason, VerificationLevel,
@@ -310,7 +310,7 @@ async fn get_is_idempotent_while_the_file_exists() {
 
 fn seg_config(connections: usize) -> Config {
     Config {
-        connections,
+        connections: Connections::Fixed(connections),
         min_segment: 64 * 1024,
         checkpoint_interval: Duration::from_millis(50),
         ..config()
@@ -336,7 +336,8 @@ async fn segmented_download_has_exact_hash() {
         DownloadState::Complete(VerificationLevel::SizeAndValidator)
     );
     assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(21, 1_000_003));
-    assert_eq!(segment_count(&env, &url), 4);
+    // 4 initial segments; work stealing may split them further.
+    assert!(segment_count(&env, &url) >= 4);
     assert!(out.diagnostics.is_empty());
 }
 
@@ -364,7 +365,8 @@ async fn unannounced_range_support_is_detected_by_second_probe() {
     let url = env.url("size=800000&seed=22&hide_accept_ranges");
     let out = env.get(seg_config(4), &url, None).await;
     assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(22, 800_000));
-    assert_eq!(segment_count(&env, &url), 4);
+    // 4 initial segments; work stealing may split them further.
+    assert!(segment_count(&env, &url) >= 4);
 }
 
 #[tokio::test]
@@ -474,4 +476,100 @@ async fn segmented_download_resumes_per_segment() {
         out.state
     );
     assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(28, 1_000_000));
+}
+
+// ---- Adaptive controller, watchdog (phase 1.3) ----
+
+fn auto_config() -> Config {
+    Config {
+        connections: Connections::Auto { max: 8 },
+        ..config()
+    }
+}
+
+fn has_diag(out: &Outcome, f: impl Fn(&idb_types::DiagnosticCode) -> bool) -> bool {
+    out.diagnostics.iter().any(|d| f(&d.code))
+}
+
+#[tokio::test]
+async fn adaptive_finds_eight_connections_within_three_seconds() {
+    let env = Env::new().await;
+    // 2 MiB/s per connection, 16 MiB/s in total (spec §7.6 target scenario).
+    let size = 64u64 << 20;
+    let url = env.url(&format!(
+        "size={size}&seed=31&per_conn_rate=2097152&total_rate=16777216"
+    ));
+    let out = env.get(auto_config(), &url, None).await;
+    assert!(
+        matches!(out.state, DownloadState::Complete(_)),
+        "{:?}",
+        out.state
+    );
+    assert!((7..=8).contains(&out.stats.connections), "{:?}", out.stats);
+    let ramp = out.stats.ramp_ms.unwrap();
+    assert!(ramp <= 3000, "ramp {ramp} ms; {:?}", out.diagnostics);
+    assert!(has_diag(&out, |c| matches!(
+        c,
+        idb_types::DiagnosticCode::ServerPerConnectionLimit { .. }
+    )));
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(31, size));
+}
+
+#[tokio::test]
+async fn adaptive_stays_low_when_the_link_is_the_bottleneck() {
+    let env = Env::new().await;
+    // No per-connection limit: only the total is capped (a saturated link).
+    let size = 16u64 << 20;
+    let url = env.url(&format!("size={size}&seed=32&total_rate=8388608"));
+    let out = env.get(auto_config(), &url, None).await;
+    assert!(matches!(out.state, DownloadState::Complete(_)));
+    assert!(out.stats.connections <= 2, "{:?}", out.stats);
+    assert!(has_diag(&out, |c| matches!(
+        c,
+        idb_types::DiagnosticCode::LinkSaturated { .. }
+    )));
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(32, size));
+}
+
+#[tokio::test]
+async fn adaptive_halves_on_429_and_completes() {
+    let env = Env::new().await;
+    let size = 16u64 << 20;
+    let url = env.url(&format!(
+        "size={size}&seed=33&per_conn_rate=2097152&429_above=2&retry_after=1"
+    ));
+    let out = env.get(auto_config(), &url, None).await;
+    assert!(
+        matches!(out.state, DownloadState::Complete(_)),
+        "{:?}",
+        out.state
+    );
+    assert!(has_diag(&out, |c| matches!(
+        c,
+        idb_types::DiagnosticCode::ServerAskedToWait { .. }
+    )));
+    assert!(out.stats.connections <= 2, "{:?}", out.stats);
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(33, size));
+}
+
+#[tokio::test]
+async fn watchdog_replaces_frozen_connections() {
+    let env = Env::new().await;
+    let mut cfg = seg_config(4);
+    cfg.stall_timeout = Duration::from_millis(800);
+    // Every response freezes for 60 s (no RST) after 300 kB.
+    let url = env.url("size=2000000&seed=34&stall_conn=300000&stall_ms=60000");
+    let t = Instant::now();
+    let out = env.get(cfg, &url, None).await;
+    assert!(
+        matches!(out.state, DownloadState::Complete(_)),
+        "{:?}",
+        out.state
+    );
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+    assert!(has_diag(&out, |c| matches!(
+        c,
+        idb_types::DiagnosticCode::StalledConnectionReassigned
+    )));
+    assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(34, 2_000_000));
 }
