@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-fn idb(dir: &Path, url: &str) -> Command {
+fn idb(dir: &Path, url: &str, connections: &str) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_idb"));
     c.args(["get", url, "-d"])
         .arg(dir)
@@ -20,7 +20,7 @@ fn idb(dir: &Path, url: &str) -> Command {
             "--checkpoint-ms",
             "30",
             "-c",
-            "4",
+            connections,
             "--min-segment-kib",
             "256",
         ])
@@ -66,8 +66,15 @@ fn sigkill_never_yields_a_wrong_file() {
         // ~0.3 s per full download at 6 MB/s with a checkpoint every 30 ms:
         // kills land before, between and after checkpoints.
         let url = format!("http://{addr}/file?size={size}&seed={seed}&per_conn_rate=6000000");
+        // Both modes: the adaptive controller (with work stealing) and fixed N.
+        // The mode may even change between restarts of the same download.
         loop {
-            let mut child = idb(dir.path(), &url).spawn().unwrap();
+            let mode = if rng.next().is_multiple_of(2) {
+                "auto"
+            } else {
+                "4"
+            };
+            let mut child = idb(dir.path(), &url, mode).spawn().unwrap();
             let wait = Duration::from_millis(rng.next() % 250);
             std::thread::sleep(wait);
             match child.try_wait().unwrap() {

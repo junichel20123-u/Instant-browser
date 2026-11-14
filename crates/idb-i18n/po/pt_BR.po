@@ -131,7 +131,7 @@ msgid "diag.StalledConnectionReassigned"
 msgstr "Uma conexão travou e o trecho foi passado para outra."
 
 msgid "cli.connections_limit"
-msgstr "O teto educado é {max} conexões por servidor. Use -c entre 1 e {max}."
+msgstr "Use -c auto (o programa decide) ou um número de 1 a {max}: {max} é o teto educado de conexões por servidor."
 
 msgid "diag.ConnectionsAdjusted.up"
 msgstr "Com {from} conexões o ganho foi de {gain}%; passando para {to}."

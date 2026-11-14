@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use idb_engine::{Config, Downloader, MAX_CONNECTIONS, Request};
+use idb_engine::{Config, Connections, Downloader, MAX_CONNECTIONS, Request};
 use idb_i18n::{Locale, action_label, describe_state, format, render_diagnostic, tr_args};
 use idb_store::Journal;
 use idb_types::{DownloadState, StateKind};
@@ -47,9 +47,10 @@ struct GetArgs {
     /// Expected SHA-256 in hex; the file is only completed if it matches.
     #[arg(long)]
     sha256: Option<String>,
-    /// Parallel connections when the server allows ranges (1-8).
-    #[arg(short = 'c', long, default_value_t = 4)]
-    connections: usize,
+    /// Connections when the server allows ranges: `auto` (default, the
+    /// program measures and decides) or a fixed number from 1 to 8.
+    #[arg(short = 'c', long, default_value = "auto")]
+    connections: String,
     /// Print the final result as one JSON line on stdout.
     #[arg(long)]
     json: bool,
@@ -97,7 +98,18 @@ fn absolute_dir(dir: &Path) -> anyhow::Result<PathBuf> {
 
 async fn get(a: GetArgs) -> anyhow::Result<u8> {
     let l = locale();
-    if a.connections == 0 || a.connections > MAX_CONNECTIONS {
+    let connections = match a.connections.trim() {
+        "auto" => Some(Connections::Auto {
+            max: MAX_CONNECTIONS,
+        }),
+        n => n
+            .trim_start_matches("fixed:")
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=MAX_CONNECTIONS).contains(n))
+            .map(Connections::Fixed),
+    };
+    let Some(connections) = connections else {
         eprintln!(
             "{}",
             tr_args(
@@ -107,13 +119,13 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
             )
         );
         return Ok(exit::USAGE);
-    }
+    };
     let dir = absolute_dir(&a.dir.unwrap_or_else(default_download_dir))?;
     let state_dir = a.state_dir.unwrap_or_else(default_state_dir);
     std::fs::create_dir_all(&state_dir)?;
     let journal = Journal::open(&state_dir.join("journal.sqlite"))?;
     let mut config = Config {
-        connections: a.connections,
+        connections,
         ..Config::default()
     };
     if let Some(ms) = a.checkpoint_ms {
@@ -153,7 +165,14 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
 
     let path = outcome.path.as_ref().map(|p| p.display().to_string());
     if json {
-        let v = serde_json::json!({ "id": outcome.id, "state": outcome.state, "path": path });
+        let v = serde_json::json!({
+            "id": outcome.id,
+            "state": outcome.state,
+            "path": path,
+            "connections": outcome.stats.connections,
+            "ramp_ms": outcome.stats.ramp_ms,
+            "peak_rate": outcome.stats.peak_rate,
+        });
         println!("{v}");
     }
     eprintln!("{}", describe_state(l, &outcome.state));

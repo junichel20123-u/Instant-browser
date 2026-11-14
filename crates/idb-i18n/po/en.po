@@ -131,7 +131,7 @@ msgid "diag.StalledConnectionReassigned"
 msgstr "A connection stalled and its part was handed to another one."
 
 msgid "cli.connections_limit"
-msgstr "The polite limit is {max} connections per server. Use -c between 1 and {max}."
+msgstr "Use -c auto (the program decides) or a number from 1 to {max}: {max} is the polite limit of connections per server."
 
 msgid "diag.ConnectionsAdjusted.up"
 msgstr "With {from} connections the gain was {gain}%; going to {to}."
