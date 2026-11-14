@@ -145,7 +145,12 @@ async fn total_rate_is_shared_between_connections() {
 async fn stall_conn_freezes_without_closing() {
     let addr = faultbox::spawn().await.unwrap();
     let t = Instant::now();
-    let r = get(addr, "/file?size=100000&seed=1&stall_conn=50000&stall_ms=400", &[]).await;
+    let r = get(
+        addr,
+        "/file?size=100000&seed=1&stall_conn=50000&stall_ms=400",
+        &[],
+    )
+    .await;
     assert!(t.elapsed() >= Duration::from_millis(400));
     assert_eq!(sha256(&r.body.unwrap()), expected_sha256(1, 100_000));
 }
