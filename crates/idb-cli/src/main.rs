@@ -6,9 +6,9 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
-use idb_engine::{Config, Downloader, Request};
-use idb_i18n::{Locale, action_label, describe_state, format};
+use clap::{Args, Parser, Subcommand};
+use idb_engine::{Config, Downloader, MAX_CONNECTIONS, Request};
+use idb_i18n::{Locale, action_label, describe_state, format, render_diagnostic, tr_args};
 use idb_store::Journal;
 use idb_types::{DownloadState, StateKind};
 
@@ -18,6 +18,7 @@ mod exit {
     pub const FAILED: u8 = 1;
     pub const NEEDS_USER: u8 = 2;
     pub const INTERNAL: u8 = 3;
+    pub const USAGE: u8 = 64;
 }
 
 #[derive(Parser)]
@@ -34,24 +35,33 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Download a URL (resumes automatically if run again).
-    Get {
-        url: String,
-        /// Destination directory (default: XDG download dir).
-        #[arg(short = 'd', long)]
-        dir: Option<PathBuf>,
-        /// Expected SHA-256 in hex; the file is only completed if it matches.
-        #[arg(long)]
-        sha256: Option<String>,
-        /// Print the final result as one JSON line on stdout.
-        #[arg(long)]
-        json: bool,
-        /// Where the journal lives (default: $XDG_STATE_HOME/idb).
-        #[arg(long, hide = true)]
-        state_dir: Option<PathBuf>,
-        /// Durable checkpoint interval in milliseconds (testing aid).
-        #[arg(long, hide = true)]
-        checkpoint_ms: Option<u64>,
-    },
+    Get(GetArgs),
+}
+
+#[derive(Args)]
+struct GetArgs {
+    url: String,
+    /// Destination directory (default: XDG download dir).
+    #[arg(short = 'd', long)]
+    dir: Option<PathBuf>,
+    /// Expected SHA-256 in hex; the file is only completed if it matches.
+    #[arg(long)]
+    sha256: Option<String>,
+    /// Parallel connections when the server allows ranges (1-8).
+    #[arg(short = 'c', long, default_value_t = 4)]
+    connections: usize,
+    /// Print the final result as one JSON line on stdout.
+    #[arg(long)]
+    json: bool,
+    /// Where the journal lives (default: $XDG_STATE_HOME/idb).
+    #[arg(long, hide = true)]
+    state_dir: Option<PathBuf>,
+    /// Durable checkpoint interval in milliseconds (testing aid).
+    #[arg(long, hide = true)]
+    checkpoint_ms: Option<u64>,
+    /// Smallest segment in KiB (testing aid).
+    #[arg(long, hide = true)]
+    min_segment_kib: Option<u64>,
 }
 
 fn home() -> Option<PathBuf> {
@@ -85,24 +95,35 @@ fn absolute_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     std::fs::canonicalize(dir).with_context(|| format!("directory {}", dir.display()))
 }
 
-async fn get(
-    url: String,
-    dir: Option<PathBuf>,
-    sha256: Option<String>,
-    json: bool,
-    state_dir: Option<PathBuf>,
-    checkpoint_ms: Option<u64>,
-) -> anyhow::Result<u8> {
+async fn get(a: GetArgs) -> anyhow::Result<u8> {
     let l = locale();
-    let dir = absolute_dir(&dir.unwrap_or_else(default_download_dir))?;
-    let state_dir = state_dir.unwrap_or_else(default_state_dir);
+    if a.connections == 0 || a.connections > MAX_CONNECTIONS {
+        eprintln!(
+            "{}",
+            tr_args(
+                l,
+                "cli.connections_limit",
+                &[("max", MAX_CONNECTIONS.to_string())]
+            )
+        );
+        return Ok(exit::USAGE);
+    }
+    let dir = absolute_dir(&a.dir.unwrap_or_else(default_download_dir))?;
+    let state_dir = a.state_dir.unwrap_or_else(default_state_dir);
     std::fs::create_dir_all(&state_dir)?;
     let journal = Journal::open(&state_dir.join("journal.sqlite"))?;
-    let mut config = Config::default();
-    if let Some(ms) = checkpoint_ms {
+    let mut config = Config {
+        connections: a.connections,
+        ..Config::default()
+    };
+    if let Some(ms) = a.checkpoint_ms {
         config.checkpoint_interval = Duration::from_millis(ms);
     }
+    if let Some(kib) = a.min_segment_kib {
+        config.min_segment = kib.max(1) * 1024;
+    }
     let engine = Downloader::new(config, journal)?;
+    let (url, sha256, json) = (a.url, a.sha256, a.json);
 
     let mut last_print = Instant::now() - Duration::from_secs(1);
     let mut last_kind = None;
@@ -139,6 +160,9 @@ async fn get(
     if let Some(p) = &path {
         eprintln!("  {p}");
     }
+    for d in &outcome.diagnostics {
+        eprintln!("  ⓘ {}", render_diagnostic(l, d));
+    }
     if let Some(a) = outcome.state.recovery() {
         eprintln!("  → {}", action_label(l, a));
     }
@@ -165,14 +189,7 @@ fn main() -> ExitCode {
     };
     let result = rt.block_on(async {
         match cli.command {
-            Command::Get {
-                url,
-                dir,
-                sha256,
-                json,
-                state_dir,
-                checkpoint_ms,
-            } => get(url, dir, sha256, json, state_dir, checkpoint_ms).await,
+            Command::Get(args) => get(args).await,
         }
     });
     match result {

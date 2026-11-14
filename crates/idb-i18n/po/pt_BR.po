@@ -129,3 +129,6 @@ msgstr "Um espelho entregou um arquivo diferente e foi ignorado: {url} ({why})."
 
 msgid "diag.StalledConnectionReassigned"
 msgstr "Uma conexão travou e o trecho foi passado para outra."
+
+msgid "cli.connections_limit"
+msgstr "O teto educado é {max} conexões por servidor. Use -c entre 1 e {max}."

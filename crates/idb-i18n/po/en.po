@@ -129,3 +129,6 @@ msgstr "A mirror delivered a different file and was ignored: {url} ({why})."
 
 msgid "diag.StalledConnectionReassigned"
 msgstr "A connection stalled and its part was handed to another one."
+
+msgid "cli.connections_limit"
+msgstr "The polite limit is {max} connections per server. Use -c between 1 and {max}."

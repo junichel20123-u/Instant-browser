@@ -16,7 +16,14 @@ fn idb(dir: &Path, url: &str) -> Command {
         .arg(dir)
         .arg("--state-dir")
         .arg(dir.join(".state"))
-        .args(["--checkpoint-ms", "30"])
+        .args([
+            "--checkpoint-ms",
+            "30",
+            "-c",
+            "4",
+            "--min-segment-kib",
+            "256",
+        ])
         .env("NO_PROXY", "127.0.0.1")
         .env_remove("HTTP_PROXY")
         .env_remove("http_proxy")
