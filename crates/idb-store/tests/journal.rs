@@ -42,3 +42,30 @@ fn persists_on_disk() {
     let j = Journal::open(&path).unwrap();
     assert_eq!(j.get(id).unwrap().unwrap().downloaded, 42);
 }
+
+#[test]
+fn segments_round_trip_and_checkpoint() {
+    use idb_store::SegmentRecord;
+    let mut j = Journal::open_in_memory().unwrap();
+    let id = j.create("u", "d").unwrap();
+    let plan = [
+        SegmentRecord {
+            start: 0,
+            end: 10,
+            done: 0,
+        },
+        SegmentRecord {
+            start: 10,
+            end: 25,
+            done: 0,
+        },
+    ];
+    j.set_segments(id, &plan).unwrap();
+    j.checkpoint(id, &[4, 15]).unwrap();
+    let segs = j.segments(id).unwrap();
+    assert_eq!(segs.iter().map(|s| s.done).collect::<Vec<_>>(), vec![4, 15]);
+    assert_eq!(j.get(id).unwrap().unwrap().downloaded, 19);
+    // Re-creating the download drops the old plan.
+    let id2 = j.create("u", "d").unwrap();
+    assert!(j.segments(id2).unwrap().is_empty());
+}

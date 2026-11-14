@@ -44,6 +44,15 @@ pub struct Record {
     pub final_path: Option<String>,
 }
 
+/// A byte range `[start, end)` of the file and how much of it is durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentRecord {
+    pub start: u64,
+    pub end: u64,
+    /// Bytes from `start` that are on disk and fsynced.
+    pub done: u64,
+}
+
 pub struct Journal {
     conn: Connection,
 }
@@ -62,6 +71,14 @@ CREATE TABLE IF NOT EXISTS downloads (
     state         TEXT NOT NULL,
     final_path    TEXT,
     UNIQUE (url, dir)
+);
+CREATE TABLE IF NOT EXISTS segments (
+    download_id INTEGER NOT NULL,
+    idx         INTEGER NOT NULL,
+    start       INTEGER NOT NULL,
+    end         INTEGER NOT NULL,
+    done        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (download_id, idx)
 );";
 
 impl Journal {
@@ -84,6 +101,11 @@ impl Journal {
     /// Creates a fresh record, replacing any previous one for `(url, dir)`.
     pub fn create(&self, url: &str, dir: &str) -> Result<DownloadId> {
         let state = serde_json::to_string(&DownloadState::Probing)?;
+        self.conn.execute(
+            "DELETE FROM segments WHERE download_id IN
+             (SELECT id FROM downloads WHERE url = ?1 AND dir = ?2)",
+            params![url, dir],
+        )?;
         self.conn.execute(
             "INSERT OR REPLACE INTO downloads (url, dir, state) VALUES (?1, ?2, ?3)",
             params![url, dir, state],
@@ -175,6 +197,56 @@ impl Journal {
             "UPDATE downloads SET final_path = ?2 WHERE id = ?1",
             params![id.0 as i64, path],
         )?;
+        Ok(())
+    }
+
+    /// Replaces the segment plan of a download.
+    pub fn set_segments(&mut self, id: DownloadId, segs: &[SegmentRecord]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM segments WHERE download_id = ?1",
+            params![id.0 as i64],
+        )?;
+        for (i, s) in segs.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO segments (download_id, idx, start, end, done) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id.0 as i64, i as i64, s.start as i64, s.end as i64, s.done as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn segments(&self, id: DownloadId) -> Result<Vec<SegmentRecord>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT start, end, done FROM segments WHERE download_id = ?1 ORDER BY idx")?;
+        let rows = st.query_map(params![id.0 as i64], |r| {
+            Ok(SegmentRecord {
+                start: r.get::<_, i64>(0)? as u64,
+                end: r.get::<_, i64>(1)? as u64,
+                done: r.get::<_, i64>(2)? as u64,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Records durable progress of every segment (and the total) atomically.
+    /// Call only after `fdatasync` of the data.
+    pub fn checkpoint(&mut self, id: DownloadId, done: &[u64]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for (i, d) in done.iter().enumerate() {
+            tx.execute(
+                "UPDATE segments SET done = ?3 WHERE download_id = ?1 AND idx = ?2",
+                params![id.0 as i64, i as i64, *d as i64],
+            )?;
+        }
+        let total: u64 = done.iter().sum();
+        tx.execute(
+            "UPDATE downloads SET downloaded = ?2 WHERE id = ?1",
+            params![id.0 as i64, total as i64],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
