@@ -49,3 +49,13 @@ Fluxo de uma conexão (`Downloader::run`):
 5. Publicação: grava `final_path`, faz o `rename` atômico (sem sobrescrever: `nome (1).ext`) e grava `Complete`.
 
 O journal é acessado via `spawn_blocking`; a escrita usa `tokio::fs`. Segmentação, `pwrite` e pré-alocação ficam para a Fase 1.2.
+
+## Download segmentado (Fase 1.2, ADR-0005)
+- `download.rs` faz a sondagem. Com `connections > 1`, tamanho conhecido e ≥ 2 × `min_segment`: um 206 já confirma o
+  suporte a Range; um 200 leva à segunda sonda (1 byte no meio). Confirmado → `Stop::Segment(resposta)`.
+- `segments.rs`: `plan()` divide `[0,total)` em até N segmentos contíguos (com teste de propriedade).
+- `segmented.rs`: um ator por segmento (`worker`), com retries próprios; a resposta da sondagem vira o segmento 0.
+  As escritas usam `pwrite` em blocos de 256 KiB. O coordenador (`run_segmented`) junta progresso e eventos
+  (`PoliteWait`) e faz o checkpoint a cada `checkpoint_interval`.
+- `disk.rs`: espaço livre (`statvfs`) e pré-alocação por sistema de arquivos (`fstatfs` + `fallocate`), via `rustix`.
+- Retomada: os segmentos vêm do journal; cada um continua em `start + done`, limitado ao tamanho real do `.part`.

@@ -22,10 +22,10 @@ Arquitetura: `docs/ARQUITETURA.md` · API: `docs/API.md` · Decisões: `docs/adr
 | `crates/idb-types` | estados, motivos, `VerificationLevel`, diagnósticos, eventos, `API_VERSION` | Fase 0 ✅ |
 | `crates/idb-i18n` | catálogo `.po` (pt-BR, en) + formatação por locale | Fase 0 ✅ |
 | `crates/faultbox` | servidor HTTP de teste com injeção de falhas (lib + bin) | Fase 0 ✅ |
-| `crates/idb-engine` | motor de download (biblioteca) | Fase 1.1 ✅ (1 conexão) |
+| `crates/idb-engine` | motor de download (biblioteca) | Fase 1.2 ✅ (N segmentos fixos) |
 | `crates/idb-store` | journal SQLite (WAL) | Fase 1.1 ✅ |
 | `crates/idb-daemon` | bin `idbd` | esqueleto |
-| `crates/idb-cli` | bin `idb` (`idb get`, usa o motor direto) | Fase 1.1 ✅ |
+| `crates/idb-cli` | bin `idb` (`idb get [-c N]`, usa o motor direto) | Fase 1.2 ✅ |
 | `crates/idb-tui` | bin `idb-tui` | esqueleto |
 | `crates/idb-gtk` | bin `idb-gtk` (fora de `default-members`) | esqueleto |
 | `crates/idb-host` | bin `idb-host` (native messaging) | esqueleto |
@@ -38,14 +38,16 @@ cargo test -p faultbox              # testes do servidor de falhas
 cargo run -p faultbox -- --port 8080
 curl -r 0-99 'http://127.0.0.1:8080/file?size=1048576&seed=1'
 INSTA_UPDATE=always cargo test      # regravar snapshots (revise o diff!)
-IDB_CRASH_ITERS=1000 cargo test --release -p idb-cli   # aceite de crash injection
+IDB_CRASH_ITERS=1000 cargo test --release -p idb-cli   # aceite de crash injection (4 conexões)
+cargo xtask bench                   # idb vs wget/curl/aria2c (precisa de aria2c e hyperfine)
 ```
 Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_conn=N`,
-`429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html` (ver `crates/faultbox/src/lib.rs`).
+`429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html`, `hide_accept_ranges` (ver `crates/faultbox/src/lib.rs`).
 
 ## Invariantes do motor (não quebre)
 - `journal.downloaded` só avança **depois** do `fdatasync` do `.part`; na retomada, offset = min(tamanho do `.part`, journal).
 - Retomada sempre com `If-Range` (ETag forte, senão `Last-Modified`). 200 com validador diferente → `NeedsUser(ResourceChanged)`, nunca mistura versões.
+- Segmentado: só o coordenador faz checkpoint (retrato dos contadores → `fdatasync` → tabela `segments`); um 200 a um pedido de segmento → `ResourceChanged` (ADR-0005).
 - Destino gravado no journal **antes** do `rename`; `get` repetido com o arquivo final presente → verifica de novo, não duplica (ADR-0003).
 
 ## Regras de código
