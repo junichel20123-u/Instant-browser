@@ -42,3 +42,6 @@ Warning: The server does not allow downloading in parts; using one connection. R
 Warning: The delay to the server is high and your system buffer (6.0 MiB) limits the speed; 18.0 MiB would be needed. Suggestion (requires administrator): tune net.ipv4.tcp_rmem.
 Warning: A mirror delivered a different file and was ignored: https://mirror.example/f.iso (hash).
 Info: A connection stalled and its part was handed to another one.
+Info: With 2 connections the gain was 95%; going to 4.
+Info: The extra connection did not help (3%); going back to 4.
+Info: Keeping 8 connections: that is the polite limit for this server.

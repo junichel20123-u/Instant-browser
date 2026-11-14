@@ -42,3 +42,6 @@ Warning: O servidor não permite baixar em partes; usando uma conexão. A retoma
 Warning: O atraso até o servidor é alto e o buffer do seu sistema (6,0 MiB) limita a velocidade; seriam necessários 18,0 MiB. Sugestão (requer administrador): ajustar net.ipv4.tcp_rmem.
 Warning: Um espelho entregou um arquivo diferente e foi ignorado: https://mirror.example/f.iso (hash).
 Info: Uma conexão travou e o trecho foi passado para outra.
+Info: Com 2 conexões o ganho foi de 95%; passando para 4.
+Info: A conexão extra não ajudou (3%); voltando para 4.
+Info: Mantendo 8 conexões: é o teto educado para este servidor.

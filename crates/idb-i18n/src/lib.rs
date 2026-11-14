@@ -161,6 +161,21 @@ pub fn render_diagnostic(locale: Locale, diag: &Diagnostic) -> String {
             vec![("url", url.clone()), ("why", why.clone())],
         ),
         DiagnosticCode::StalledConnectionReassigned => ("diag.StalledConnectionReassigned", vec![]),
+        DiagnosticCode::ConnectionsAdjusted { from, to, gain_pct } => {
+            let id = match to.cmp(from) {
+                std::cmp::Ordering::Greater => "diag.ConnectionsAdjusted.up",
+                std::cmp::Ordering::Less => "diag.ConnectionsAdjusted.down",
+                std::cmp::Ordering::Equal => "diag.ConnectionsAdjusted.stay",
+            };
+            (
+                id,
+                vec![
+                    ("from", from.to_string()),
+                    ("to", to.to_string()),
+                    ("gain", gain_pct.to_string()),
+                ],
+            )
+        }
     };
     tr_args(locale, id, &args)
 }

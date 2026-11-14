@@ -132,3 +132,12 @@ msgstr "A connection stalled and its part was handed to another one."
 
 msgid "cli.connections_limit"
 msgstr "The polite limit is {max} connections per server. Use -c between 1 and {max}."
+
+msgid "diag.ConnectionsAdjusted.up"
+msgstr "With {from} connections the gain was {gain}%; going to {to}."
+
+msgid "diag.ConnectionsAdjusted.down"
+msgstr "The extra connection did not help ({gain}%); going back to {to}."
+
+msgid "diag.ConnectionsAdjusted.stay"
+msgstr "Keeping {to} connections: that is the polite limit for this server."

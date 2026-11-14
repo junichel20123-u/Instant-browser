@@ -38,6 +38,13 @@ pub enum DiagnosticCode {
         why: String,
     },
     StalledConnectionReassigned,
+    /// The adaptive controller changed the number of connections.
+    ConnectionsAdjusted {
+        from: u32,
+        to: u32,
+        /// Gain of the last measured step, in percent.
+        gain_pct: i32,
+    },
 }
 
 impl DiagnosticCode {
@@ -45,7 +52,8 @@ impl DiagnosticCode {
         match self {
             DiagnosticCode::ServerPerConnectionLimit { .. }
             | DiagnosticCode::LinkSaturated { .. }
-            | DiagnosticCode::StalledConnectionReassigned => Severity::Info,
+            | DiagnosticCode::StalledConnectionReassigned
+            | DiagnosticCode::ConnectionsAdjusted { .. } => Severity::Info,
             DiagnosticCode::ServerAskedToWait { .. }
             | DiagnosticCode::RangeNotSupported
             | DiagnosticCode::BdpExceedsRmem { .. }

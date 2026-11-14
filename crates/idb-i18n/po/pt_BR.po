@@ -132,3 +132,12 @@ msgstr "Uma conexão travou e o trecho foi passado para outra."
 
 msgid "cli.connections_limit"
 msgstr "O teto educado é {max} conexões por servidor. Use -c entre 1 e {max}."
+
+msgid "diag.ConnectionsAdjusted.up"
+msgstr "Com {from} conexões o ganho foi de {gain}%; passando para {to}."
+
+msgid "diag.ConnectionsAdjusted.down"
+msgstr "A conexão extra não ajudou ({gain}%); voltando para {to}."
+
+msgid "diag.ConnectionsAdjusted.stay"
+msgstr "Mantendo {to} conexões: é o teto educado para este servidor."

@@ -61,6 +61,21 @@ fn all_diagnostics() -> Vec<Diagnostic> {
             why: "hash".into(),
         },
         DiagnosticCode::StalledConnectionReassigned,
+        DiagnosticCode::ConnectionsAdjusted {
+            from: 2,
+            to: 4,
+            gain_pct: 95,
+        },
+        DiagnosticCode::ConnectionsAdjusted {
+            from: 8,
+            to: 4,
+            gain_pct: 3,
+        },
+        DiagnosticCode::ConnectionsAdjusted {
+            from: 8,
+            to: 8,
+            gain_pct: 40,
+        },
     ]
     .into_iter()
     .map(Diagnostic::from)
