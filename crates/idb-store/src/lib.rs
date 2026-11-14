@@ -231,6 +231,29 @@ impl Journal {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Replaces the whole segment map (ranges change with work stealing) and
+    /// the total in one transaction. Call only after `fdatasync` of the data.
+    pub fn checkpoint_map(&mut self, id: DownloadId, segs: &[SegmentRecord]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM segments WHERE download_id = ?1",
+            params![id.0 as i64],
+        )?;
+        for (i, s) in segs.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO segments (download_id, idx, start, end, done) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id.0 as i64, i as i64, s.start as i64, s.end as i64, s.done as i64],
+            )?;
+        }
+        let total: u64 = segs.iter().map(|s| s.done).sum();
+        tx.execute(
+            "UPDATE downloads SET downloaded = ?2 WHERE id = ?1",
+            params![id.0 as i64, total as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Records durable progress of every segment (and the total) atomically.
     /// Call only after `fdatasync` of the data.
     pub fn checkpoint(&mut self, id: DownloadId, done: &[u64]) -> Result<()> {

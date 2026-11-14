@@ -69,3 +69,34 @@ fn segments_round_trip_and_checkpoint() {
     let id2 = j.create("u", "d").unwrap();
     assert!(j.segments(id2).unwrap().is_empty());
 }
+
+#[test]
+fn checkpoint_map_replaces_ranges() {
+    use idb_store::SegmentRecord;
+    let mut j = Journal::open_in_memory().unwrap();
+    let id = j.create("u", "d").unwrap();
+    j.set_segments(
+        id,
+        &[SegmentRecord {
+            start: 0,
+            end: 100,
+            done: 0,
+        }],
+    )
+    .unwrap();
+    let after_steal = [
+        SegmentRecord {
+            start: 0,
+            end: 50,
+            done: 30,
+        },
+        SegmentRecord {
+            start: 50,
+            end: 100,
+            done: 10,
+        },
+    ];
+    j.checkpoint_map(id, &after_steal).unwrap();
+    assert_eq!(j.segments(id).unwrap(), after_steal.to_vec());
+    assert_eq!(j.get(id).unwrap().unwrap().downloaded, 40);
+}
