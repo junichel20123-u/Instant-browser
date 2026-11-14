@@ -125,3 +125,27 @@ async fn hide_accept_ranges_still_serves_ranges() {
     assert_eq!(header(&r, "content-range"), "bytes 500-500/1000");
     assert_eq!(r.body.unwrap(), faultbox::body::range(4, 500, 501));
 }
+
+#[tokio::test]
+async fn total_rate_is_shared_between_connections() {
+    let addr = faultbox::spawn().await.unwrap();
+    // 4 connections, each capped at 4 MB/s, all together at 4 MB/s:
+    // 4 x 1 MB must take about 1 s, not 0.25 s.
+    let path = "/file?size=1000000&per_conn_rate=4000000&total_rate=4000000";
+    let t = Instant::now();
+    let tasks: Vec<_> = (0..4).map(|_| tokio::spawn(get(addr, path, &[]))).collect();
+    for t in tasks {
+        assert_eq!(t.await.unwrap().body.unwrap().len(), 1_000_000);
+    }
+    let secs = t.elapsed().as_secs_f64();
+    assert!((0.8..1.4).contains(&secs), "took {secs:.2}s");
+}
+
+#[tokio::test]
+async fn stall_conn_freezes_without_closing() {
+    let addr = faultbox::spawn().await.unwrap();
+    let t = Instant::now();
+    let r = get(addr, "/file?size=100000&seed=1&stall_conn=50000&stall_ms=400", &[]).await;
+    assert!(t.elapsed() >= Duration::from_millis(400));
+    assert_eq!(sha256(&r.body.unwrap()), expected_sha256(1, 100_000));
+}

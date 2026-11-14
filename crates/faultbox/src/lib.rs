@@ -4,6 +4,9 @@
 //! Scenarios (query string):
 //! - `no_ranges`: ignore `Range`, always 200, no `Accept-Ranges`.
 //! - `per_conn_rate=B`: limit each response to `B` bytes/s.
+//! - `total_rate=B`: limit all responses together to `B` bytes/s.
+//! - `stall_conn=N&stall_ms=M`: after `N` body bytes, freeze the response
+//!   for `M` ms (default 60 s) without closing the connection.
 //! - `latency_ms=M`: delay each response by `M` ms.
 //! - `drop_conn=N`: abort the connection after `N` body bytes.
 //! - `429_above=N&retry_after=S`: answer 429 when more than `N` responses
@@ -44,6 +47,8 @@ struct Shared {
     served: AtomicU64,
     version: AtomicU64,
     requests: AtomicU64,
+    /// Virtual clock of the global token bucket (`total_rate`).
+    total_clock: std::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 /// Decrements the in-flight counter when the response body is dropped.
@@ -61,6 +66,9 @@ struct Scenario {
     seed: u64,
     no_ranges: bool,
     per_conn_rate: Option<u64>,
+    total_rate: Option<u64>,
+    stall_conn: Option<u64>,
+    stall_ms: u64,
     latency_ms: Option<u64>,
     drop_conn: Option<u64>,
     limit_429_above: Option<usize>,
@@ -84,6 +92,9 @@ impl Scenario {
             seed: num("seed")?.unwrap_or(0),
             no_ranges: q.contains_key("no_ranges"),
             per_conn_rate: num("per_conn_rate")?.filter(|r| *r > 0),
+            total_rate: num("total_rate")?.filter(|r| *r > 0),
+            stall_conn: num("stall_conn")?,
+            stall_ms: num("stall_ms")?.unwrap_or(60_000),
             latency_ms: num("latency_ms")?,
             drop_conn: num("drop_conn")?,
             limit_429_above: num("429_above")?.map(|n| n as usize),
@@ -221,7 +232,11 @@ fn body_stream(
     guard: InFlight,
 ) -> impl futures_util::Stream<Item = std::io::Result<Bytes>> {
     // With a rate limit, send ~10 chunks per second for smooth pacing.
-    let chunk = sc.per_conn_rate.map_or(CHUNK, |r| (r / 10).clamp(1, CHUNK));
+    let slowest = match (sc.per_conn_rate, sc.total_rate) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    let chunk = slowest.map_or(CHUNK, |r| (r / 20).clamp(1, CHUNK));
     let state = (start, 0u64, guard);
     futures_util::stream::unfold(state, move |(pos, sent, guard)| {
         let shared = shared.clone();
@@ -240,8 +255,31 @@ fn body_stream(
             if let Some(limit) = sc.drop_conn {
                 n = n.min(limit - sent).max(1);
             }
+            if let Some(limit) = sc.stall_conn
+                && sent < limit
+            {
+                n = n.min(limit - sent).max(1);
+            }
+            if sc.stall_conn == Some(sent) && sent > 0 {
+                tokio::time::sleep(Duration::from_millis(sc.stall_ms)).await;
+            }
             if let Some(rate) = sc.per_conn_rate {
                 tokio::time::sleep(Duration::from_secs_f64(n as f64 / rate as f64)).await;
+            }
+            if let Some(rate) = sc.total_rate {
+                // Reserve a slot on the shared virtual clock, then wait for it.
+                let cost = Duration::from_secs_f64(n as f64 / rate as f64);
+                let due = {
+                    let now = tokio::time::Instant::now();
+                    let mut clock = shared
+                        .total_clock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let next = clock.map_or(now, |c| c.max(now)) + cost;
+                    *clock = Some(next);
+                    next
+                };
+                tokio::time::sleep_until(due).await;
             }
             let data = body::range(seed, pos, pos + n);
             let total = shared.served.fetch_add(n, Ordering::SeqCst) + n;
