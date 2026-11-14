@@ -22,10 +22,10 @@ Arquitetura: `docs/ARQUITETURA.md` · API: `docs/API.md` · Decisões: `docs/adr
 | `crates/idb-types` | estados, motivos, `VerificationLevel`, diagnósticos, eventos, `API_VERSION` | Fase 0 ✅ |
 | `crates/idb-i18n` | catálogo `.po` (pt-BR, en) + formatação por locale | Fase 0 ✅ |
 | `crates/faultbox` | servidor HTTP de teste com injeção de falhas (lib + bin) | Fase 0 ✅ |
-| `crates/idb-engine` | motor de download (biblioteca) | Fase 1.2 ✅ (N segmentos fixos) |
-| `crates/idb-store` | journal SQLite (WAL) | Fase 1.1 ✅ |
+| `crates/idb-engine` | motor de download (biblioteca) | Fase 1.3 ✅ (controlador adaptativo, roubo, watchdog) |
+| `crates/idb-store` | journal SQLite (WAL), mapa de segmentos | Fase 1.3 ✅ |
 | `crates/idb-daemon` | bin `idbd` | esqueleto |
-| `crates/idb-cli` | bin `idb` (`idb get [-c N]`, usa o motor direto) | Fase 1.2 ✅ |
+| `crates/idb-cli` | bin `idb` (`idb get [-c auto|N]`, usa o motor direto) | Fase 1.3 ✅ |
 | `crates/idb-tui` | bin `idb-tui` | esqueleto |
 | `crates/idb-gtk` | bin `idb-gtk` (fora de `default-members`) | esqueleto |
 | `crates/idb-host` | bin `idb-host` (native messaging) | esqueleto |
@@ -42,12 +42,13 @@ IDB_CRASH_ITERS=1000 cargo test --release -p idb-cli   # aceite de crash injecti
 cargo xtask bench                   # idb vs wget/curl/aria2c (precisa de aria2c e hyperfine)
 ```
 Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_conn=N`,
-`429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html`, `hide_accept_ranges` (ver `crates/faultbox/src/lib.rs`).
+`429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html`, `hide_accept_ranges`, `total_rate=B`, `stall_conn=N&stall_ms=M` (ver `crates/faultbox/src/lib.rs`).
 
 ## Invariantes do motor (não quebre)
 - `journal.downloaded` só avança **depois** do `fdatasync` do `.part`; na retomada, offset = min(tamanho do `.part`, journal).
 - Retomada sempre com `If-Range` (ETag forte, senão `Last-Modified`). 200 com validador diferente → `NeedsUser(ResourceChanged)`, nunca mistura versões.
-- Segmentado: só o coordenador faz checkpoint (retrato dos contadores → `fdatasync` → tabela `segments`); um 200 a um pedido de segmento → `ResourceChanged` (ADR-0005).
+- Segmentado: só o coordenador faz checkpoint (retrato do mapa → `fdatasync` → `checkpoint_map`); um 200 a um pedido de segmento → `ResourceChanged` (ADR-0005).
+- Roubo/estacionamento cortam uma faixa só depois de `received`, nunca de `written` (ADR-0006); o coordenador é o único dono do `WorkMap`.
 - Destino gravado no journal **antes** do `rename`; `get` repetido com o arquivo final presente → verifica de novo, não duplica (ADR-0003).
 
 ## Regras de código

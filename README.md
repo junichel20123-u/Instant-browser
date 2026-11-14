@@ -1,6 +1,6 @@
 # Instant Download Browser (IDB)
 
-O **Instant Download Browser (IDB)** é um gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvolvimento (Fase 1.2: download segmentado).**
+O **Instant Download Browser (IDB)** é um gerenciador e acelerador de downloads para Linux, escrito em Rust. **Em desenvolvimento (Fase 1.3: conexões adaptativas).**
 
 - Acelera **quando é possível**, com múltiplas conexões HTTP Range ajustadas automaticamente.
 - **Não promete o impossível:** nenhum programa passa da velocidade contratada da sua internet.
@@ -15,10 +15,12 @@ O **Instant Download Browser (IDB)** é um gerenciador e acelerador de downloads
 
 ## Uso (Fase 1.1)
 ```sh
-idb get URL [-d PASTA] [-c CONEXÕES] [--sha256 HEX] [--json]
+idb get URL [-d PASTA] [-c auto|N] [--sha256 HEX] [--json]
 ```
-Quando o servidor permite baixar em partes, o IDB usa até `-c` conexões (padrão 4; teto educado de 8 por servidor).
-Se o servidor não permite, usa uma só e explica o motivo. Rodar de novo o mesmo comando retoma de onde parou. O arquivo é baixado como `.part` e só recebe o nome final depois
+Quando o servidor permite baixar em partes, o IDB começa com uma conexão e acrescenta outras enquanto isso deixar o
+download mais rápido (`-c auto`, o padrão; teto educado de 8 por servidor). Ao terminar, ele explica onde parou, por
+exemplo: "O servidor limita cerca de 2,0 MiB/s por conexão; com 8 conexões chegamos a 16,0 MiB/s." Use `-c N` para
+fixar N conexões. Se o servidor não permite partes, o IDB usa uma conexão só e diz o motivo. Rodar de novo o mesmo comando retoma de onde parou. O arquivo é baixado como `.part` e só recebe o nome final depois
 de verificado.
 
 | Código de saída | Significado |

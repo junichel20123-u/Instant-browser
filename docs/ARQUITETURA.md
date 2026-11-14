@@ -59,3 +59,12 @@ O journal é acessado via `spawn_blocking`; a escrita usa `tokio::fs`. Segmenta�
   (`PoliteWait`) e faz o checkpoint a cada `checkpoint_interval`.
 - `disk.rs`: espaço livre (`statvfs`) e pré-alocação por sistema de arquivos (`fstatfs` + `fallocate`), via `rustix`.
 - Retomada: os segmentos vêm do journal; cada um continua em `start + done`, limitado ao tamanho real do `.part`.
+
+## Controlador adaptativo, roubo e watchdog (Fase 1.3, ADR-0006)
+- `workmap.rs`: faixas com lock próprio (`received`, `written`, fim que pode encolher); `assign` (faixa livre ou
+  roubo da metade final da maior), `park`, `release`, `snapshot` para o journal.
+- `controller.rs`: janelas de 500 ms com os bytes recebidos do socket; rampa +1, +2, +4… enquanto o ganho for > 10%
+  e o RTT não saltar; volta ao último número útil; 429/503 cortam pela metade. `Mode::Fixed(n)` desliga o controlador.
+- `segmented.rs`: um worker por faixa, um pedido por worker. O coordenador (`run_segmented` em `download.rs`) ajusta
+  o número de conexões ao alvo, decide retries e pausas, roda o watchdog e faz o checkpoint do mapa.
+- `Outcome.stats`: conexões finais, rampa até 90% do platô e pico (expostos em `idb get --json`).
