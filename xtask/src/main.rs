@@ -32,11 +32,12 @@ const PROXY_VARS: [&str; 6] = [
 /// Benchmark subjects: (label, shell command; `$D` is the output dir, `$U` the URL).
 fn tools(idb: &Path) -> Vec<(String, String)> {
     let idb = idb.display();
-    let run = |c: u32| format!("{idb} get -c {c} -d $D --state-dir $D/.s $U");
+    let run = |c: &str| format!("{idb} get -c {c} -d $D --state-dir $D/.s $U");
     vec![
-        ("idb -c1".into(), run(1)),
-        ("idb -c4".into(), run(4)),
-        ("idb -c8".into(), run(8)),
+        ("idb -c auto".into(), run("auto")),
+        ("idb -c1".into(), run("1")),
+        ("idb -c4".into(), run("4")),
+        ("idb -c8".into(), run("8")),
         ("wget".into(), "wget -q -O $D/f $U".into()),
         ("curl".into(), "curl -s -o $D/f $U".into()),
         (
@@ -129,6 +130,11 @@ fn bench() -> ExitCode {
             3,
         ),
         ("B — sem limite, loopback (32 MiB)", base.clone(), 5),
+        (
+            "C — 2 MiB/s por conexão e 16 MiB/s no total (32 MiB)",
+            format!("{base}&per_conn_rate=2097152&total_rate=16777216"),
+            3,
+        ),
     ];
     let mut out = String::new();
     out += &format!(
@@ -166,6 +172,38 @@ fn bench() -> ExitCode {
             }
         }
         out += &format!("\n{runs} execuções por ferramenta (+1 de aquecimento), mediana.\n\n");
+    }
+    out += "### Controlador adaptativo (`idb -c auto --json`, uma execução)\n\n| Cenário | Conexões finais | Rampa até 90% do platô (ms) | Pico (MiB/s) |\n|---|---:|---:|---:|\n";
+    for (title, url, _) in &scenarios {
+        let d = work.join("json");
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::create_dir_all(&d);
+        let mut c = Command::new(target.join("idb"));
+        c.args(["get", "-c", "auto", "--json", "-d"])
+            .arg(&d)
+            .arg("--state-dir")
+            .arg(d.join(".s"))
+            .arg(url)
+            .stderr(Stdio::null());
+        for v in PROXY_VARS {
+            c.env_remove(v);
+        }
+        let v: Option<serde_json::Value> = c
+            .output()
+            .ok()
+            .and_then(|o| serde_json::from_slice(&o.stdout).ok());
+        let short = title.split(" — ").next().unwrap_or(title);
+        match v {
+            Some(v) => {
+                out += &format!(
+                    "| {short} | {} | {} | {:.1} |\n",
+                    v["connections"],
+                    v["ramp_ms"].as_u64().map_or("—".into(), |r| r.to_string()),
+                    v["peak_rate"].as_f64().unwrap_or(0.0) / (1 << 20) as f64
+                );
+            }
+            None => out += &format!("| {short} | falhou | | |\n"),
+        }
     }
     let _ = server.kill();
     let _ = server.wait();
