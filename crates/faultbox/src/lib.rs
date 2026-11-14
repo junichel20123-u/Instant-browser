@@ -13,6 +13,8 @@
 //! - `fail_first=N&status=C`: the first `N` requests get status `C`
 //!   (default 503) with `Retry-After` (`retry_after`, default 1).
 //! - `html`: answer with an HTML page instead of the file.
+//! - `hide_accept_ranges`: never send `Accept-Ranges`, but still honour
+//!   `Range` (servers that support ranges without announcing it).
 
 pub mod body;
 mod range;
@@ -67,6 +69,7 @@ struct Scenario {
     fail_first: Option<u64>,
     fail_status: u16,
     html: bool,
+    hide_accept_ranges: bool,
 }
 
 impl Scenario {
@@ -89,6 +92,7 @@ impl Scenario {
             fail_first: num("fail_first")?,
             fail_status: num("status")?.map_or(503, |c| c as u16),
             html: q.contains_key("html"),
+            hide_accept_ranges: q.contains_key("hide_accept_ranges"),
         })
     }
 }
@@ -192,7 +196,7 @@ async fn serve_file(
         .header(header::CONTENT_LENGTH, end - start)
         .header(header::ETAG, &tag)
         .header(header::LAST_MODIFIED, LAST_MODIFIED);
-    if !sc.no_ranges {
+    if !sc.no_ranges && !sc.hide_accept_ranges {
         builder = builder.header(header::ACCEPT_RANGES, "bytes");
     }
     if status == StatusCode::PARTIAL_CONTENT {

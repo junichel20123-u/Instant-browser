@@ -113,3 +113,15 @@ async fn html_interstitial() {
     assert!(header(&r, "content-type").starts_with("text/html"));
     assert!(r.body.unwrap().starts_with(b"<!DOCTYPE html"));
 }
+
+#[tokio::test]
+async fn hide_accept_ranges_still_serves_ranges() {
+    let addr = faultbox::spawn().await.unwrap();
+    let path = "/file?size=1000&seed=4&hide_accept_ranges";
+    let r = get(addr, path, &[]).await;
+    assert_eq!(header(&r, "accept-ranges"), "");
+    let r = get(addr, path, &[("range", "bytes=500-500")]).await;
+    assert_eq!(r.status, 206);
+    assert_eq!(header(&r, "content-range"), "bytes 500-500/1000");
+    assert_eq!(r.body.unwrap(), faultbox::body::range(4, 500, 501));
+}
