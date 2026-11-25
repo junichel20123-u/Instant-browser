@@ -34,6 +34,8 @@ pub(crate) struct Shared {
     pub strong_etag: Option<String>,
     pub total: u64,
     pub file: Arc<File>,
+    /// Global speed limit shared by all workers (`--limit`).
+    pub limiter: Option<Arc<crate::ratelimit::RateLimiter>>,
     /// Bytes received from sockets (speed is measured here, spec §7.14).
     pub received: AtomicU64,
     pub events: mpsc::Sender<Event>,
@@ -168,6 +170,9 @@ async fn stream(
                 break;
             }
         };
+        if let Some(l) = &sh.limiter {
+            l.acquire(chunk.len() as u64).await;
+        }
         sh.received.fetch_add(chunk.len() as u64, Ordering::Relaxed);
         // The lease may have been cut (stolen or parked) meanwhile.
         let ok = lease.claim(pos, chunk.len() as u64) as usize;

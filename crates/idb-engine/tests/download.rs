@@ -9,6 +9,10 @@ use idb_types::{
     DownloadState, FailReason, HashAlgo, HashSource, NeedsUserReason, VerificationLevel,
 };
 
+/// Tests that measure time take this lock so they do not compete for CPU
+/// with each other (debug builds, shared CI runners).
+static TIMING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn config() -> Config {
     Config {
         no_proxy: true,
@@ -163,6 +167,7 @@ async fn etag_change_mid_download_needs_user_and_never_mixes() {
 
 #[tokio::test]
 async fn honours_retry_after() {
+    let _timing = TIMING.lock().await;
     let env = Env::new().await;
     let t = Instant::now();
     let out = env
@@ -343,6 +348,7 @@ async fn segmented_download_has_exact_hash() {
 
 #[tokio::test]
 async fn parallel_connections_beat_a_per_connection_limit() {
+    let _timing = TIMING.lock().await;
     let env = Env::new().await;
     let time = |c: usize, seed: u32| {
         let url = env.url(&format!("size=2000000&seed={seed}&per_conn_rate=1000000"));
@@ -493,6 +499,7 @@ fn has_diag(out: &Outcome, f: impl Fn(&idb_types::DiagnosticCode) -> bool) -> bo
 
 #[tokio::test]
 async fn adaptive_finds_eight_connections_within_three_seconds() {
+    let _timing = TIMING.lock().await;
     let env = Env::new().await;
     // 2 MiB/s per connection, 16 MiB/s in total (spec §7.6 target scenario).
     let size = 64u64 << 20;
@@ -517,6 +524,7 @@ async fn adaptive_finds_eight_connections_within_three_seconds() {
 
 #[tokio::test]
 async fn adaptive_stays_low_when_the_link_is_the_bottleneck() {
+    let _timing = TIMING.lock().await;
     let env = Env::new().await;
     // No per-connection limit: only the total is capped (a saturated link).
     let size = 16u64 << 20;
@@ -533,6 +541,7 @@ async fn adaptive_stays_low_when_the_link_is_the_bottleneck() {
 
 #[tokio::test]
 async fn adaptive_halves_on_429_and_completes() {
+    let _timing = TIMING.lock().await;
     let env = Env::new().await;
     let size = 16u64 << 20;
     let url = env.url(&format!(
@@ -572,4 +581,23 @@ async fn watchdog_replaces_frozen_connections() {
         idb_types::DiagnosticCode::StalledConnectionReassigned
     )));
     assert_eq!(sha_of(&out.path.unwrap()), expected_sha256(34, 2_000_000));
+}
+
+#[tokio::test]
+async fn limit_caps_the_total_speed() {
+    let _timing = TIMING.lock().await;
+    let env = Env::new().await;
+    let mut cfg = auto_config();
+    cfg.limit = Some(2 << 20); // 2 MiB/s for all connections together
+    let size = 6u64 << 20;
+    let t = Instant::now();
+    let out = env
+        .get(cfg, &env.url(&format!("size={size}&seed=35")), None)
+        .await;
+    let rate = size as f64 / t.elapsed().as_secs_f64();
+    assert!(matches!(out.state, DownloadState::Complete(_)));
+    let limit = (2u64 << 20) as f64;
+    assert!((0.8 * limit..=1.2 * limit).contains(&rate), "{rate:.0} B/s");
+    // The limit, not the server, is the bottleneck: stay at few connections.
+    assert!(out.stats.connections <= 2, "{:?}", out.stats);
 }

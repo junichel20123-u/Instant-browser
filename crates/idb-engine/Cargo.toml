@@ -17,6 +17,7 @@ rustix.workspace = true
 bytes.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 faultbox.workspace = true
 tempfile.workspace = true
 proptest.workspace = true
