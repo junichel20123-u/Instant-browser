@@ -19,16 +19,17 @@ Arquitetura: `docs/ARQUITETURA.md` · API: `docs/API.md` · Decisões: `docs/adr
 ## Workspace
 | Crate | Papel | Estado |
 |---|---|---|
-| `crates/idb-types` | estados, motivos, `VerificationLevel`, diagnósticos, eventos, `API_VERSION` | Fase 0 ✅ |
+| `crates/idb-types` | estados, motivos, diagnósticos, eventos, protocolo JSON-RPC v1 (`api.rs`) | Fase 1.4 ✅ |
 | `crates/idb-i18n` | catálogo `.po` (pt-BR, en) + formatação por locale | Fase 0 ✅ |
 | `crates/faultbox` | servidor HTTP de teste com injeção de falhas (lib + bin) | Fase 0 ✅ |
-| `crates/idb-engine` | motor de download (biblioteca) | Fase 1.3 ✅ (controlador adaptativo, roubo, watchdog) |
-| `crates/idb-store` | journal SQLite (WAL), mapa de segmentos | Fase 1.3 ✅ |
+| `crates/idb-engine` | motor de download (biblioteca), doctor, `Manager`, pareamento | Fase 1.4 ✅ |
+| `crates/idb-store` | journal SQLite (WAL), mapa de segmentos, dispositivos pareados | Fase 1.4 ✅ |
 | `crates/idb-daemon` | bin `idbd` | esqueleto |
-| `crates/idb-cli` | bin `idb` (`idb get [-c auto|N]`, usa o motor direto) | Fase 1.3 ✅ |
+| `crates/idb-cli` | bin `idb` (`get`, `doctor`, `devices`; contrato em `docs/CLI.md`) | Fase 1.4 ✅ |
 | `crates/idb-tui` | bin `idb-tui` | esqueleto |
 | `crates/idb-gtk` | bin `idb-gtk` (fora de `default-members`) | esqueleto |
 | `crates/idb-host` | bin `idb-host` (native messaging) | esqueleto |
+| `crates/idb-mobile` | fachada UniFFI do motor para Android/iOS (fora de `default-members`) | ponte ✅ (`docs/MOBILE.md`) |
 | `xtask` | automação (`cargo xtask ci`) | Fase 0 ✅ |
 
 ## Comandos
@@ -40,6 +41,7 @@ curl -r 0-99 'http://127.0.0.1:8080/file?size=1048576&seed=1'
 INSTA_UPDATE=always cargo test      # regravar snapshots (revise o diff!)
 IDB_CRASH_ITERS=1000 cargo test --release -p idb-cli   # aceite de crash injection (4 conexões)
 cargo xtask bench                   # idb vs wget/curl/aria2c (precisa de aria2c e hyperfine)
+cargo xtask mobile-bindings         # gera Kotlin/Swift do idb-mobile em target/bindings/
 ```
 Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_conn=N`,
 `429_above=N&retry_after=S`, `etag_change_at=P`, `fail_first=N&status=C`, `html`, `hide_accept_ranges`, `total_rate=B`, `stall_conn=N&stall_ms=M` (ver `crates/faultbox/src/lib.rs`).
@@ -49,6 +51,8 @@ Cenários do faultbox: `no_ranges`, `per_conn_rate=B`, `latency_ms=M`, `drop_con
 - Retomada sempre com `If-Range` (ETag forte, senão `Last-Modified`). 200 com validador diferente → `NeedsUser(ResourceChanged)`, nunca mistura versões.
 - Segmentado: só o coordenador faz checkpoint (retrato do mapa → `fdatasync` → `checkpoint_map`); um 200 a um pedido de segmento → `ResourceChanged` (ADR-0005).
 - Roubo/estacionamento cortam uma faixa só depois de `received`, nunca de `written` (ADR-0006); o coordenador é o único dono do `WorkMap`.
+- Protocolo: mudou o JSON na rede → snapshot de `idb-types/tests/api.rs` quebra; só mude com `api_version` nova (`docs/API.md`).
+- Celular: só hashes de códigos/tokens no disco; nenhuma porta aberta sem pareamento explícito (ADR-0007).
 - Destino gravado no journal **antes** do `rename`; `get` repetido com o arquivo final presente → verifica de novo, não duplica (ADR-0003).
 
 ## Regras de código
@@ -75,6 +79,6 @@ escolher nome/licença definitivos · rodar comandos como root ou que alterem o 
 6. Commit pequeno, com mensagem clara.
 
 ## Decisões provisórias (pendentes de confirmação)
-- Licença `MIT OR Apache-2.0`; edição 2024. (Nome definido: Instant Download Browser — ADR-0004.)
+- Licença `MIT OR Apache-2.0`; edição 2024. (Nome definido: Instant Download Browser — ADR-0004; UniFFI MPL-2.0 aprovado — ADR-0008.)
 - i18n: `.po` parseado em Rust puro em vez de `gettext-rs` (ADR-0002).
 - `Retry-After` só em segundos (data HTTP ainda não é interpretada; usa backoff).

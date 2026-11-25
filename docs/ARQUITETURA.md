@@ -68,3 +68,12 @@ O journal é acessado via `spawn_blocking`; a escrita usa `tokio::fs`. Segmenta�
 - `segmented.rs`: um worker por faixa, um pedido por worker. O coordenador (`run_segmented` em `download.rs`) ajusta
   o número de conexões ao alvo, decide retries e pausas, roda o watchdog e faz o checkpoint do mapa.
 - `Outcome.stats`: conexões finais, rampa até 90% do platô e pico (expostos em `idb get --json`).
+
+## Doctor, limite e pontes para o celular (Fase 1.4)
+- `doctor.rs`: sondagem (a mesma do download, via `probe_mid`) + medição com o `Controller` em leitores descartáveis;
+  devolve `DoctorReport` com diagnósticos e nunca grava nada.
+- `ratelimit.rs`: token bucket global (`--limit`), aplicado antes de aceitar cada pedaço, nos dois caminhos de escrita.
+- `manager.rs`: iniciar, pausar, retomar e listar downloads concorrentes; base do `idb-mobile` e do futuro `idbd`.
+- `pairing.rs` + tabelas `pairing_codes`/`devices`: pareamento do celular (ADR-0007).
+- `idb-types::api`: protocolo JSON-RPC v1, independente de transporte (`docs/API.md`).
+- `idb-mobile`: fachada UniFFI (ADR-0008, `docs/MOBILE.md`).
