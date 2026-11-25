@@ -53,6 +53,16 @@ pub struct SegmentRecord {
     pub done: u64,
 }
 
+/// A paired device (phone). Only the token's hash is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Device {
+    pub id: u64,
+    pub name: String,
+    pub created_at: u64,
+    pub last_seen: Option<u64>,
+    pub revoked: bool,
+}
+
 pub struct Journal {
     conn: Connection,
 }
@@ -79,6 +89,19 @@ CREATE TABLE IF NOT EXISTS segments (
     end         INTEGER NOT NULL,
     done        INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (download_id, idx)
+);
+CREATE TABLE IF NOT EXISTS pairing_codes (
+    code_hash  TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS devices (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_seen  INTEGER,
+    revoked    INTEGER NOT NULL DEFAULT 0
 );";
 
 impl Journal {
@@ -279,5 +302,76 @@ impl Journal {
             params![id.0 as i64, serde_json::to_string(state)?],
         )?;
         Ok(())
+    }
+
+    /// Stores a pairing code (by hash) valid until `expires_at` (unix secs).
+    pub fn add_pairing_code(&self, code_hash: &str, expires_at: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO pairing_codes (code_hash, expires_at) VALUES (?1, ?2)",
+            params![code_hash, expires_at as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Marks a code as used if it exists, is unused and not expired.
+    /// Returns whether it was accepted (single use: a second call fails).
+    pub fn consume_pairing_code(&self, code_hash: &str, now: u64) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE pairing_codes SET used = 1
+             WHERE code_hash = ?1 AND used = 0 AND expires_at >= ?2",
+            params![code_hash, now as i64],
+        )?;
+        Ok(changed == 1)
+    }
+
+    pub fn add_device(&self, name: &str, token_hash: &str, now: u64) -> Result<u64> {
+        self.conn.execute(
+            "INSERT INTO devices (name, token_hash, created_at) VALUES (?1, ?2, ?3)",
+            params![name, token_hash, now as i64],
+        )?;
+        Ok(self.conn.last_insert_rowid() as u64)
+    }
+
+    /// Finds a non-revoked device by token hash and records the access.
+    pub fn touch_device(&self, token_hash: &str, now: u64) -> Result<Option<u64>> {
+        let id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM devices WHERE token_hash = ?1 AND revoked = 0",
+                params![token_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = id {
+            self.conn.execute(
+                "UPDATE devices SET last_seen = ?2 WHERE id = ?1",
+                params![id, now as i64],
+            )?;
+        }
+        Ok(id.map(|i| i as u64))
+    }
+
+    pub fn devices(&self) -> Result<Vec<Device>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT id, name, created_at, last_seen, revoked FROM devices ORDER BY id")?;
+        let rows = st.query_map([], |r| {
+            Ok(Device {
+                id: r.get::<_, i64>(0)? as u64,
+                name: r.get(1)?,
+                created_at: r.get::<_, i64>(2)? as u64,
+                last_seen: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
+                revoked: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Revokes a device; returns false if it did not exist.
+    pub fn revoke_device(&self, id: u64) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE devices SET revoked = 1 WHERE id = ?1",
+            params![id as i64],
+        )? == 1)
     }
 }

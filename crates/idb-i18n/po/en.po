@@ -174,3 +174,21 @@ msgstr "Measured: {rate} with {n} connections."
 
 msgid "doctor.ok"
 msgstr "Nothing prevents the download."
+
+msgid "devices.none"
+msgstr "No paired phones. QR pairing arrives with the background service (idbd)."
+
+msgid "devices.never"
+msgstr "never"
+
+msgid "devices.row"
+msgstr "{id}. {name} — last access: {seen}"
+
+msgid "devices.row.revoked"
+msgstr "{id}. {name} — access removed"
+
+msgid "devices.revoked"
+msgstr "Access for device {id} removed."
+
+msgid "devices.not_found"
+msgstr "There is no device {id}. See the list with: idb devices list"

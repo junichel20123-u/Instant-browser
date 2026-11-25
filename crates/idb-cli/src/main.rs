@@ -38,6 +38,22 @@ enum Command {
     Get(GetArgs),
     /// Explain what limits the speed of a URL, without downloading it.
     Doctor(DoctorArgs),
+    /// Phones paired to control this computer (pairing arrives with the daemon).
+    Devices {
+        #[command(subcommand)]
+        action: DevicesAction,
+        /// Where the journal lives (default: $XDG_STATE_HOME/idb).
+        #[arg(long, hide = true, global = true)]
+        state_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DevicesAction {
+    /// List paired phones.
+    List,
+    /// Remove a phone's access immediately.
+    Revoke { id: u64 },
 }
 
 #[derive(Args)]
@@ -338,6 +354,59 @@ async fn doctor(a: DoctorArgs) -> anyhow::Result<u8> {
     Ok(r.blocking.as_ref().map_or(exit::COMPLETE, exit_for))
 }
 
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+fn devices(action: DevicesAction, state_dir: Option<PathBuf>) -> anyhow::Result<u8> {
+    let l = locale();
+    let state_dir = state_dir.unwrap_or_else(default_state_dir);
+    std::fs::create_dir_all(&state_dir)?;
+    let journal = Journal::open(&state_dir.join("journal.sqlite"))?;
+    let now = unix_now();
+    match action {
+        DevicesAction::List => {
+            let list = journal.devices()?;
+            if list.is_empty() {
+                println!("{}", tr(l, "devices.none"));
+            }
+            for d in list {
+                let seen = d.last_seen.map_or_else(
+                    || tr(l, "devices.never"),
+                    |t| format::duration(now.saturating_sub(t)),
+                );
+                let key = if d.revoked {
+                    "devices.row.revoked"
+                } else {
+                    "devices.row"
+                };
+                println!(
+                    "{}",
+                    tr_args(
+                        l,
+                        key,
+                        &[("id", d.id.to_string()), ("name", d.name), ("seen", seen),],
+                    )
+                );
+            }
+            Ok(exit::COMPLETE)
+        }
+        DevicesAction::Revoke { id } => {
+            if journal.revoke_device(id)? {
+                println!(
+                    "{}",
+                    tr_args(l, "devices.revoked", &[("id", id.to_string())])
+                );
+                Ok(exit::COMPLETE)
+            } else {
+                Ok(usage(l, "devices.not_found", &[("id", id.to_string())]))
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_env("IDB_LOG"))
@@ -355,6 +424,7 @@ fn main() -> ExitCode {
         match cli.command {
             Command::Get(args) => get(args).await,
             Command::Doctor(args) => doctor(args).await,
+            Command::Devices { action, state_dir } => devices(action, state_dir),
         }
     });
     match result {

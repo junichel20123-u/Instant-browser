@@ -132,3 +132,25 @@ fn doctor_reports_json_and_exit_codes() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stdout).contains("Este link abre uma página"));
 }
+
+#[test]
+fn devices_list_and_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join(".s");
+    let s = state.to_str().unwrap();
+    let out = idb(&["devices", "list", "--state-dir", s], dir.path());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Nenhum celular pareado"));
+    // Pair one device through the engine API, then manage it from the CLI.
+    let j = idb_store::Journal::open(&state.join("journal.sqlite")).unwrap();
+    let offer = idb_engine::pairing::new_offer(&j, "h", 1, &"0".repeat(64), 0).unwrap();
+    let (id, _token) = idb_engine::pairing::redeem(&j, &offer.code, "Pixel", 1).unwrap();
+    drop(j);
+    let out = idb(&["devices", "list", "--state-dir", s], dir.path());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Pixel"));
+    let id = id.to_string();
+    let out = idb(&["devices", "revoke", &id, "--state-dir", s], dir.path());
+    assert_eq!(out.status.code(), Some(0));
+    let out = idb(&["devices", "revoke", "999", "--state-dir", s], dir.path());
+    assert_eq!(out.status.code(), Some(64));
+}

@@ -857,6 +857,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "faultbox",
+ "getrandom 0.4.3",
  "idb-store",
  "idb-types",
  "proptest",
