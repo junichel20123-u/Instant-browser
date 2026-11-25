@@ -55,6 +55,8 @@ pub struct Config {
     pub max_redirects: usize,
     /// Ignore proxy environment variables (used by tests on loopback).
     pub no_proxy: bool,
+    /// Global speed limit in bytes/s (`--limit`), shared by all connections.
+    pub limit: Option<u64>,
     pub user_agent: String,
     /// How many parallel connections to use when the server allows ranges.
     pub connections: Mode,
@@ -79,6 +81,7 @@ impl Default for Config {
             read_timeout: Duration::from_secs(30),
             max_redirects: 10,
             no_proxy: false,
+            limit: None,
             user_agent: format!("idb/{}", env!("CARGO_PKG_VERSION")),
             connections: Mode::Auto {
                 max: MAX_CONNECTIONS,
@@ -135,9 +138,10 @@ pub struct Stats {
 const WINDOW: Duration = Duration::from_millis(500);
 
 pub struct Downloader {
-    client: reqwest::Client,
-    config: Config,
+    pub(crate) client: reqwest::Client,
+    pub(crate) config: Config,
     journal: Arc<Mutex<Journal>>,
+    limiter: Option<Arc<crate::ratelimit::RateLimiter>>,
 }
 
 /// Why one attempt stopped.
@@ -186,11 +190,11 @@ pub(crate) fn io_state(e: &std::io::Error) -> DownloadState {
     }
 }
 
-fn strong_etag(meta: &ResourceMeta) -> Option<&str> {
+pub(crate) fn strong_etag(meta: &ResourceMeta) -> Option<&str> {
     meta.etag.as_deref().filter(|e| !e.starts_with("W/"))
 }
 
-fn looks_like_unexpected_html(content_type: Option<&str>, url: &reqwest::Url) -> bool {
+pub(crate) fn looks_like_unexpected_html(content_type: Option<&str>, url: &reqwest::Url) -> bool {
     let is_html = content_type.is_some_and(|ct| {
         let ct = ct.to_ascii_lowercase();
         ct.starts_with("text/html") || ct.starts_with("application/xhtml")
@@ -212,10 +216,14 @@ impl Downloader {
         if config.no_proxy {
             b = b.no_proxy();
         }
+        let limiter = config
+            .limit
+            .map(|r| Arc::new(crate::ratelimit::RateLimiter::new(r)));
         Ok(Downloader {
             client: b.build()?,
             config,
             journal: Arc::new(Mutex::new(journal)),
+            limiter,
         })
     }
 
@@ -640,25 +648,7 @@ impl Downloader {
         if !parallel || total < 2 * self.config.min_segment {
             return None;
         }
-        // 200 without proof of range support: ask for one byte in the middle
-        // (servers that support ranges without announcing them, Gopeed #1652).
-        let mid = total / 2;
-        let probe = self
-            .client
-            .get(&job.url)
-            .header(header::ACCEPT_ENCODING, "identity")
-            .header(header::RANGE, format!("bytes={mid}-{mid}"))
-            .send()
-            .await
-            .ok()?;
-        let exact = probe.status() == StatusCode::PARTIAL_CONTENT
-            && probe
-                .headers()
-                .get(header::CONTENT_RANGE)
-                .and_then(|v| v.to_str().ok())
-                .and_then(headers::content_range)
-                == Some((mid, mid, Some(total)));
-        Some(exact)
+        Some(probe_mid(&self.client, &job.url, total).await)
     }
 
     async fn stream_single(
@@ -697,6 +687,9 @@ impl Downloader {
         loop {
             match resp.chunk().await {
                 Ok(Some(bytes)) => {
+                    if let Some(l) = &self.limiter {
+                        l.acquire(bytes.len() as u64).await;
+                    }
                     file.write_all(&bytes).await?;
                     job.offset += bytes.len() as u64;
                     since_checkpoint += bytes.len() as u64;
@@ -804,6 +797,7 @@ impl Downloader {
             total,
             file,
             received: std::sync::atomic::AtomicU64::new(0),
+            limiter: self.limiter.clone(),
             events: tx,
         });
 
@@ -1062,7 +1056,7 @@ fn push_decision(job: &mut Job, d: Decision) {
 }
 
 /// Explains where the controller settled (spec §7.15).
-fn settled_diagnostic(conns: usize, rate: f64) -> Diagnostic {
+pub(crate) fn settled_diagnostic(conns: usize, rate: f64) -> Diagnostic {
     let total = idb_types::BytesPerSec(rate as u64);
     if conns > 2 {
         DiagnosticCode::ServerPerConnectionLimit {
@@ -1089,4 +1083,27 @@ fn stats(rates: &[(Duration, f64)], ctl: &Controller) -> Stats {
         connections: ctl.target() as u32,
         peak_rate: ctl.best_rate() as u64,
     }
+}
+
+/// Second probe for a 200 without proof of range support: ask for one byte
+/// in the middle (servers that support ranges without announcing them,
+/// Gopeed #1652). Only an exact 206 counts.
+pub(crate) async fn probe_mid(client: &reqwest::Client, url: &str, total: u64) -> bool {
+    let mid = total / 2;
+    let Ok(probe) = client
+        .get(url)
+        .header(header::ACCEPT_ENCODING, "identity")
+        .header(header::RANGE, format!("bytes={mid}-{mid}"))
+        .send()
+        .await
+    else {
+        return false;
+    };
+    probe.status() == StatusCode::PARTIAL_CONTENT
+        && probe
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(headers::content_range)
+            == Some((mid, mid, Some(total)))
 }

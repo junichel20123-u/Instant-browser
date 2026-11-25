@@ -1,19 +1,22 @@
 //! IDB download engine.
 //!
-//! Phase 1.1: single connection, `.part` file, persistent journal, resume
-//! with `If-Range`, retries with backoff and `Retry-After`, and final
-//! verification before an atomic rename.
+//! Probing, adaptive segmented downloads with work stealing, resume from a
+//! persistent journal, verification before an atomic rename, and a doctor
+//! that explains what limits the speed.
 
 mod controller;
 mod disk;
+mod doctor;
 mod download;
 pub mod headers;
+pub mod ratelimit;
 mod segmented;
 pub mod segments;
 mod verify;
 mod workmap;
 
 pub use controller::Mode as Connections;
+pub use doctor::DoctorReport;
 pub use download::{
     Config, Downloader, MAX_CONNECTIONS, Outcome, Progress, Request, RetryPolicy, Stats,
 };
