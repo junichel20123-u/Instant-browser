@@ -126,7 +126,8 @@ pub struct Outcome {
 /// Measurements of a segmented run (for `--json` and benchmarks).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stats {
-    /// Time until the rate first reached 90% of the best measured rate.
+    /// Time until the rate first reached 90% of the plateau (the median rate
+    /// of the second half of the download).
     pub ramp_ms: Option<u64>,
     /// Connection target when the download ended.
     pub connections: u32,
@@ -1073,10 +1074,14 @@ pub(crate) fn settled_diagnostic(conns: usize, rate: f64) -> Diagnostic {
 fn stats(rates: &[(Duration, f64)], ctl: &Controller) -> Stats {
     // Ignore the last window: it is usually cut short by the end of the file.
     let full = &rates[..rates.len().saturating_sub(1)];
-    let best = full.iter().map(|(_, r)| *r).fold(0.0, f64::max);
+    // Plateau = sustained rate: the median of the second half of the windows.
+    // A single bursty window must not move the 90% mark.
+    let mut tail: Vec<f64> = full[full.len() / 2..].iter().map(|(_, r)| *r).collect();
+    tail.sort_by(f64::total_cmp);
+    let plateau = tail.get(tail.len() / 2).copied().unwrap_or(0.0);
     let ramp = full
         .iter()
-        .find(|(_, r)| best > 0.0 && *r >= 0.9 * best)
+        .find(|(_, r)| plateau > 0.0 && *r >= 0.9 * plateau)
         .map(|(t, _)| t.as_millis() as u64);
     Stats {
         ramp_ms: ramp,

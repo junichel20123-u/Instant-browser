@@ -16,6 +16,11 @@ Regressão > 20% em qualquer métrica falha o CI (a partir da Fase 1).
 
 ## Resultados
 
+> **Mudança de métrica (Fase 1.4):** "rampa até 90% do platô" passou a usar como platô a **mediana da segunda
+> metade das janelas** (a vazão sustentada), e não mais o pico de uma janela isolada, que oscilava com a carga da
+> máquina. As medições abaixo, da Fase 1.3, usaram a definição antiga (pico). Os testes do controlador mostram 2,5 s
+> nas duas definições.
+
 ### 2026-11-14 — Fase 1.3 (controlador adaptativo, roubo de trabalho, correção da CPU)
 
 Mesma máquina, o mesmo `cargo xtask bench` e as mesmas ressalvas do loopback da medição anterior (abaixo). Novidades:

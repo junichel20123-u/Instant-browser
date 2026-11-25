@@ -9,9 +9,10 @@ use idb_types::{
     DownloadState, FailReason, HashAlgo, HashSource, NeedsUserReason, VerificationLevel,
 };
 
-/// Tests that measure time take this lock so they do not compete for CPU
-/// with each other (debug builds, shared CI runners).
-static TIMING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Tests that measure time run alone: they take this lock exclusively while
+/// every other test takes it shared, so nothing competes for CPU with them
+/// (debug builds, shared CI runners).
+static TIMING: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 fn config() -> Config {
     Config {
@@ -70,6 +71,7 @@ fn sha_of(path: &std::path::Path) -> String {
 
 #[tokio::test]
 async fn downloads_and_verifies_with_size_and_validator() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let out = env
         .get(config(), &env.url("size=1000003&seed=11"), None)
@@ -86,6 +88,7 @@ async fn downloads_and_verifies_with_size_and_validator() {
 
 #[tokio::test]
 async fn user_hash_gives_hash_matched_or_verification_failure() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=50000&seed=2");
     let out = env
@@ -120,6 +123,7 @@ async fn user_hash_gives_hash_matched_or_verification_failure() {
 
 #[tokio::test]
 async fn existing_file_is_not_overwritten() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     std::fs::write(env.dir.path().join("file"), b"mine").unwrap();
     let out = env.get(config(), &env.url("size=100&seed=1"), None).await;
@@ -129,6 +133,7 @@ async fn existing_file_is_not_overwritten() {
 
 #[tokio::test]
 async fn dropped_connections_resume_with_correct_hash() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let out = env
         .get(
@@ -147,6 +152,7 @@ async fn dropped_connections_resume_with_correct_hash() {
 
 #[tokio::test]
 async fn etag_change_mid_download_needs_user_and_never_mixes() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=400000&seed=4&drop_conn=250000&etag_change_at=50");
     let out = env.get(config(), &url, None).await;
@@ -167,7 +173,7 @@ async fn etag_change_mid_download_needs_user_and_never_mixes() {
 
 #[tokio::test]
 async fn honours_retry_after() {
-    let _timing = TIMING.lock().await;
+    let _timing = TIMING.write().await;
     let env = Env::new().await;
     let t = Instant::now();
     let out = env
@@ -183,6 +189,7 @@ async fn honours_retry_after() {
 
 #[tokio::test]
 async fn polite_wait_is_reported() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let req = Request {
         url: env.url("size=10&fail_first=1&status=429&retry_after=1"),
@@ -201,6 +208,7 @@ async fn polite_wait_is_reported() {
 
 #[tokio::test]
 async fn html_page_needs_user() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let out = env.get(config(), &env.url("size=10&html"), None).await;
     assert_eq!(
@@ -211,6 +219,7 @@ async fn html_page_needs_user() {
 
 #[tokio::test]
 async fn not_found_fails_with_recovery() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = format!("http://{}/missing", env.addr);
     let out = env.get(config(), &url, None).await;
@@ -220,6 +229,7 @@ async fn not_found_fails_with_recovery() {
 
 #[tokio::test]
 async fn gives_up_when_no_progress_is_possible() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     // Ranges ignored and every response drops: we can never get past 1000 bytes.
     let out = env
@@ -237,6 +247,7 @@ async fn gives_up_when_no_progress_is_possible() {
 
 #[tokio::test]
 async fn resumes_from_journal_in_a_new_run() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let mut cfg = config();
     cfg.retry.max_attempts = 0;
@@ -278,6 +289,7 @@ async fn resumes_from_journal_in_a_new_run() {
 
 #[tokio::test]
 async fn crash_after_rename_does_not_download_again() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=5000&seed=6");
     let out = env.get(config(), &url, None).await;
@@ -298,6 +310,7 @@ async fn crash_after_rename_does_not_download_again() {
 
 #[tokio::test]
 async fn get_is_idempotent_while_the_file_exists() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=3000&seed=12");
     let first = env.get(config(), &url, None).await.path.unwrap();
@@ -333,6 +346,7 @@ fn segment_count(env: &Env, url: &str) -> usize {
 
 #[tokio::test]
 async fn segmented_download_has_exact_hash() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=1000003&seed=21");
     let out = env.get(seg_config(4), &url, None).await;
@@ -348,7 +362,7 @@ async fn segmented_download_has_exact_hash() {
 
 #[tokio::test]
 async fn parallel_connections_beat_a_per_connection_limit() {
-    let _timing = TIMING.lock().await;
+    let _timing = TIMING.write().await;
     let env = Env::new().await;
     let time = |c: usize, seed: u32| {
         let url = env.url(&format!("size=2000000&seed={seed}&per_conn_rate=1000000"));
@@ -367,6 +381,7 @@ async fn parallel_connections_beat_a_per_connection_limit() {
 
 #[tokio::test]
 async fn unannounced_range_support_is_detected_by_second_probe() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=800000&seed=22&hide_accept_ranges");
     let out = env.get(seg_config(4), &url, None).await;
@@ -377,6 +392,7 @@ async fn unannounced_range_support_is_detected_by_second_probe() {
 
 #[tokio::test]
 async fn no_range_support_falls_back_to_one_connection_with_diagnostic() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=800000&seed=23&no_ranges");
     let out = env.get(seg_config(4), &url, None).await;
@@ -391,6 +407,7 @@ async fn no_range_support_falls_back_to_one_connection_with_diagnostic() {
 
 #[tokio::test]
 async fn segments_survive_dropped_connections() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=1000000&seed=24&drop_conn=70000");
     let out = env.get(seg_config(4), &url, None).await;
@@ -404,6 +421,7 @@ async fn segments_survive_dropped_connections() {
 
 #[tokio::test]
 async fn segmented_resource_change_never_mixes_versions() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     // Connections drop, so segments must ask again after the file changed:
     // If-Range then gets a 200 and the download stops instead of mixing.
@@ -427,6 +445,7 @@ async fn segmented_resource_change_never_mixes_versions() {
 
 #[tokio::test]
 async fn segmented_backs_off_on_429_and_completes() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=800000&seed=26&429_above=2&retry_after=1&per_conn_rate=2000000");
     let out = env.get(seg_config(4), &url, None).await;
@@ -440,6 +459,7 @@ async fn segmented_backs_off_on_429_and_completes() {
 
 #[tokio::test]
 async fn disk_full_is_detected_before_writing() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let mut cfg = seg_config(4);
     cfg.min_free_bytes = u64::MAX / 2;
@@ -453,6 +473,7 @@ async fn disk_full_is_detected_before_writing() {
 
 #[tokio::test]
 async fn segmented_download_resumes_per_segment() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let url = env.url("size=1000000&seed=28&drop_conn=100000");
     let mut cfg = seg_config(4);
@@ -499,7 +520,7 @@ fn has_diag(out: &Outcome, f: impl Fn(&idb_types::DiagnosticCode) -> bool) -> bo
 
 #[tokio::test]
 async fn adaptive_finds_eight_connections_within_three_seconds() {
-    let _timing = TIMING.lock().await;
+    let _timing = TIMING.write().await;
     let env = Env::new().await;
     // 2 MiB/s per connection, 16 MiB/s in total (spec §7.6 target scenario).
     let size = 64u64 << 20;
@@ -524,7 +545,7 @@ async fn adaptive_finds_eight_connections_within_three_seconds() {
 
 #[tokio::test]
 async fn adaptive_stays_low_when_the_link_is_the_bottleneck() {
-    let _timing = TIMING.lock().await;
+    let _timing = TIMING.write().await;
     let env = Env::new().await;
     // No per-connection limit: only the total is capped (a saturated link).
     let size = 16u64 << 20;
@@ -541,7 +562,7 @@ async fn adaptive_stays_low_when_the_link_is_the_bottleneck() {
 
 #[tokio::test]
 async fn adaptive_halves_on_429_and_completes() {
-    let _timing = TIMING.lock().await;
+    let _timing = TIMING.write().await;
     let env = Env::new().await;
     let size = 16u64 << 20;
     let url = env.url(&format!(
@@ -563,6 +584,7 @@ async fn adaptive_halves_on_429_and_completes() {
 
 #[tokio::test]
 async fn watchdog_replaces_frozen_connections() {
+    let _shared = TIMING.read().await;
     let env = Env::new().await;
     let mut cfg = seg_config(4);
     cfg.stall_timeout = Duration::from_millis(800);
@@ -585,7 +607,7 @@ async fn watchdog_replaces_frozen_connections() {
 
 #[tokio::test]
 async fn limit_caps_the_total_speed() {
-    let _timing = TIMING.lock().await;
+    let _timing = TIMING.write().await;
     let env = Env::new().await;
     let mut cfg = auto_config();
     cfg.limit = Some(2 << 20); // 2 MiB/s for all connections together
