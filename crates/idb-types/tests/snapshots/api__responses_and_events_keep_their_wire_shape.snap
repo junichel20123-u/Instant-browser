@@ -1,0 +1,58 @@
+---
+source: crates/idb-types/tests/api.rs
+expression: wire
+---
+[
+  {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "api_version": 1,
+      "server": "idbd/0.0.1"
+    }
+  },
+  {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "downloads": [
+        {
+          "done": 1024,
+          "eta_secs": 6,
+          "filename": "f.iso",
+          "id": 3,
+          "speed": 512,
+          "state": {
+            "state": "Downloading"
+          },
+          "total": 4096,
+          "url": "https://example.org/f.iso"
+        }
+      ]
+    }
+  },
+  {
+    "error": {
+      "code": -32004,
+      "data": {
+        "kind": "DirNotAllowed"
+      },
+      "message": "dir outside allowed_dirs"
+    },
+    "id": 3,
+    "jsonrpc": "2.0"
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "event",
+    "params": {
+      "data": {
+        "id": 3,
+        "state": {
+          "state": "Paused"
+        }
+      },
+      "event": "StateChanged"
+    }
+  }
+]

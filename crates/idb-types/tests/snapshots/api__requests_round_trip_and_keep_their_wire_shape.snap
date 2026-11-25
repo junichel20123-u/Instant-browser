@@ -1,0 +1,86 @@
+---
+source: crates/idb-types/tests/api.rs
+expression: wire
+---
+[
+  {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "session.hello",
+    "params": {
+      "api_version": 1,
+      "client": "idb-android/0.1"
+    }
+  },
+  {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "method": "download.add",
+    "params": {
+      "connections": "auto",
+      "dir": "/home/ana/Downloads",
+      "limit": 2097152,
+      "url": "https://example.org/f.iso"
+    }
+  },
+  {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "method": "download.pause",
+    "params": {
+      "id": 3
+    }
+  },
+  {
+    "id": 4,
+    "jsonrpc": "2.0",
+    "method": "download.remove",
+    "params": {
+      "delete_file": true,
+      "id": 3
+    }
+  },
+  {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "method": "download.list",
+    "params": {
+      "filter": "Downloading"
+    }
+  },
+  {
+    "id": 6,
+    "jsonrpc": "2.0",
+    "method": "download.list",
+    "params": {}
+  },
+  {
+    "id": 7,
+    "jsonrpc": "2.0",
+    "method": "doctor.diagnose",
+    "params": {
+      "url": "https://example.org/f.iso"
+    }
+  },
+  {
+    "id": 8,
+    "jsonrpc": "2.0",
+    "method": "events.subscribe",
+    "params": {
+      "level": {
+        "level": "Summary"
+      }
+    }
+  },
+  {
+    "id": 9,
+    "jsonrpc": "2.0",
+    "method": "events.subscribe",
+    "params": {
+      "level": {
+        "id": 3,
+        "level": "Detail"
+      }
+    }
+  }
+]

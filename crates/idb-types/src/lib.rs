@@ -4,6 +4,7 @@
 //! Clients never compute anything important: the daemon sends these
 //! structured values and clients only translate and display them.
 
+pub mod api;
 mod diagnostic;
 mod event;
 mod ids;
