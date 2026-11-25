@@ -1,0 +1,35 @@
+[package]
+name = "idb-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IDB engine facade for Android (Kotlin) and iOS (Swift) via UniFFI"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+name = "idb_mobile"
+
+[[bin]]
+# Generates Kotlin/Swift bindings from the compiled library (cargo xtask mobile-bindings).
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+idb-types.workspace = true
+idb-i18n.workspace = true
+idb-engine.workspace = true
+idb-store.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+uniffi = { version = "0.33", features = ["cli"] }
+
+[dev-dependencies]
+faultbox.workspace = true
+tempfile.workspace = true
+
+# Not the workspace lints: the UniFFI scaffolding is generated FFI code.
+# Hand-written code in this crate still has no `unsafe` (see ADR-0008).
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

@@ -29,3 +29,41 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# UniFFI (Mozilla) is MPL-2.0, approved for idb-mobile only (ADR-0008).
+# Listed per crate so any other MPL dependency still fails the check.
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_bindgen"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_core"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_internal_macros"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_macros"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_meta"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_parse_rs"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_pipeline"
+
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "uniffi_udl"

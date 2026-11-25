@@ -218,6 +218,48 @@ fn bench() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Builds `idb-mobile` and generates Kotlin and Swift bindings from it
+/// (UniFFI library mode) into `target/bindings/`.
+fn mobile_bindings() -> ExitCode {
+    if !cargo(&["build", "-p", "idb-mobile"]) {
+        return ExitCode::FAILURE;
+    }
+    let target = root().join("target");
+    let lib = ["libidb_mobile.so", "libidb_mobile.dylib"]
+        .iter()
+        .map(|n| target.join("debug").join(n))
+        .find(|p| p.exists());
+    let Some(lib) = lib else {
+        eprintln!("libidb_mobile not found in target/debug");
+        return ExitCode::FAILURE;
+    };
+    let lib = lib.display().to_string();
+    for lang in ["kotlin", "swift"] {
+        let out = target.join("bindings").join(lang).display().to_string();
+        let args = [
+            "run",
+            "-q",
+            "-p",
+            "idb-mobile",
+            "--bin",
+            "uniffi-bindgen",
+            "--",
+            "generate",
+            "--library",
+            &lib,
+            "--language",
+            lang,
+            "--out-dir",
+            &out,
+        ];
+        if !cargo(&args) {
+            return ExitCode::FAILURE;
+        }
+        println!("{lang} bindings: {out}");
+    }
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("ci") => {
@@ -231,8 +273,9 @@ fn main() -> ExitCode {
             }
         }
         Some("bench") => bench(),
+        Some("mobile-bindings") => mobile_bindings(),
         _ => {
-            eprintln!("usage: cargo xtask <ci|bench>");
+            eprintln!("usage: cargo xtask <ci|bench|mobile-bindings>");
             ExitCode::FAILURE
         }
     }
