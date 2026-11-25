@@ -141,3 +141,36 @@ msgstr "The extra connection did not help ({gain}%); going back to {to}."
 
 msgid "diag.ConnectionsAdjusted.stay"
 msgstr "Keeping {to} connections: that is the polite limit for this server."
+
+msgid "cli.invalid_sha256"
+msgstr "The --sha256 value must have 64 hexadecimal characters (0-9, a-f)."
+
+msgid "cli.invalid_limit"
+msgstr "Could not understand --limit. Examples: 2M, 500k, 1.5MiB."
+
+msgid "doctor.size"
+msgstr "Size: {size}"
+
+msgid "doctor.ranges"
+msgstr "Download in parts: {value}"
+
+msgid "doctor.ranges.yes"
+msgstr "yes"
+
+msgid "doctor.ranges.no"
+msgstr "no"
+
+msgid "doctor.unknown"
+msgstr "unknown"
+
+msgid "doctor.validator.yes"
+msgstr "Verification and resume: possible (the server identifies the file version)."
+
+msgid "doctor.validator.no"
+msgstr "Verification and resume: limited (the server does not identify the file version)."
+
+msgid "doctor.recommend"
+msgstr "Measured: {rate} with {n} connections."
+
+msgid "doctor.ok"
+msgstr "Nothing prevents the download."

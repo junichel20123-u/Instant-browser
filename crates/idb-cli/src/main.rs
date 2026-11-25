@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use idb_engine::{Config, Connections, Downloader, MAX_CONNECTIONS, Request};
-use idb_i18n::{Locale, action_label, describe_state, format, render_diagnostic, tr_args};
+use idb_engine::{Config, Connections, DoctorReport, Downloader, MAX_CONNECTIONS, Request};
+use idb_i18n::{Locale, action_label, describe_state, format, render_diagnostic, tr, tr_args};
 use idb_store::Journal;
-use idb_types::{DownloadState, StateKind};
+use idb_types::{Diagnostic, DownloadState, StateKind};
 
-/// Exit codes are part of the CLI contract (documented in README).
+/// Exit codes are part of the CLI contract (see docs/CLI.md).
 mod exit {
     pub const COMPLETE: u8 = 0;
     pub const FAILED: u8 = 1;
@@ -25,7 +25,7 @@ mod exit {
 #[command(
     name = "idb",
     version,
-    about = "Download manager that never delivers a wrong file"
+    about = "Instant Download Browser: downloads that are fast, polite and never wrong"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -36,6 +36,19 @@ struct Cli {
 enum Command {
     /// Download a URL (resumes automatically if run again).
     Get(GetArgs),
+    /// Explain what limits the speed of a URL, without downloading it.
+    Doctor(DoctorArgs),
+}
+
+#[derive(Args)]
+struct Common {
+    /// Connections when the server allows ranges: `auto` (default, the
+    /// program measures and decides) or a fixed number from 1 to 8.
+    #[arg(short = 'c', long, default_value = "auto")]
+    connections: String,
+    /// Print the result as one JSON line on stdout.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -47,13 +60,14 @@ struct GetArgs {
     /// Expected SHA-256 in hex; the file is only completed if it matches.
     #[arg(long)]
     sha256: Option<String>,
-    /// Connections when the server allows ranges: `auto` (default, the
-    /// program measures and decides) or a fixed number from 1 to 8.
-    #[arg(short = 'c', long, default_value = "auto")]
-    connections: String,
-    /// Print the final result as one JSON line on stdout.
+    /// Speed limit for this download, e.g. `2M`, `500k`, `1.5MiB`.
     #[arg(long)]
-    json: bool,
+    limit: Option<String>,
+    /// Do not show progress (results and errors are still printed).
+    #[arg(short = 'q', long)]
+    quiet: bool,
+    #[command(flatten)]
+    common: Common,
     /// Where the journal lives (default: $XDG_STATE_HOME/idb).
     #[arg(long, hide = true)]
     state_dir: Option<PathBuf>,
@@ -63,6 +77,16 @@ struct GetArgs {
     /// Smallest segment in KiB (testing aid).
     #[arg(long, hide = true)]
     min_segment_kib: Option<u64>,
+}
+
+#[derive(Args)]
+struct DoctorArgs {
+    url: String,
+    /// Maximum probing time in seconds.
+    #[arg(long, default_value_t = 5)]
+    seconds: u64,
+    #[command(flatten)]
+    common: Common,
 }
 
 fn home() -> Option<PathBuf> {
@@ -96,9 +120,14 @@ fn absolute_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     std::fs::canonicalize(dir).with_context(|| format!("directory {}", dir.display()))
 }
 
-async fn get(a: GetArgs) -> anyhow::Result<u8> {
-    let l = locale();
-    let connections = match a.connections.trim() {
+/// Prints a translated usage error and returns the usage exit code.
+fn usage(l: Locale, msgid: &str, args: &[(&str, String)]) -> u8 {
+    eprintln!("{}", tr_args(l, msgid, args));
+    exit::USAGE
+}
+
+fn parse_connections(s: &str) -> Option<Connections> {
+    match s.trim() {
         "auto" => Some(Connections::Auto {
             max: MAX_CONNECTIONS,
         }),
@@ -108,17 +137,51 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
             .ok()
             .filter(|n| (1..=MAX_CONNECTIONS).contains(n))
             .map(Connections::Fixed),
+    }
+}
+
+fn valid_sha256(s: &str) -> bool {
+    let s = s.trim();
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Diagnostics for `--json`: the structured code plus the translated text.
+fn diagnostics_json(l: Locale, ds: &[Diagnostic]) -> serde_json::Value {
+    ds.iter()
+        .map(|d| {
+            serde_json::json!({
+                "code": d.code,
+                "severity": d.severity,
+                "text": render_diagnostic(l, d),
+            })
+        })
+        .collect()
+}
+
+fn exit_for(state: &DownloadState) -> u8 {
+    match state.kind() {
+        StateKind::Complete => exit::COMPLETE,
+        StateKind::NeedsUser => exit::NEEDS_USER,
+        _ if matches!(state, DownloadState::Failed(_)) => exit::FAILED,
+        _ => exit::INTERNAL,
+    }
+}
+
+async fn get(a: GetArgs) -> anyhow::Result<u8> {
+    let l = locale();
+    let max = MAX_CONNECTIONS.to_string();
+    let Some(connections) = parse_connections(&a.common.connections) else {
+        return Ok(usage(l, "cli.connections_limit", &[("max", max)]));
     };
-    let Some(connections) = connections else {
-        eprintln!(
-            "{}",
-            tr_args(
-                l,
-                "cli.connections_limit",
-                &[("max", MAX_CONNECTIONS.to_string())]
-            )
-        );
-        return Ok(exit::USAGE);
+    if let Some(h) = &a.sha256
+        && !valid_sha256(h)
+    {
+        return Ok(usage(l, "cli.invalid_sha256", &[]));
+    }
+    let limit = match a.limit.as_deref().map(idb_engine::ratelimit::parse_rate) {
+        Some(None) => return Ok(usage(l, "cli.invalid_limit", &[])),
+        Some(Some(r)) => Some(r),
+        None => None,
     };
     let dir = absolute_dir(&a.dir.unwrap_or_else(default_download_dir))?;
     let state_dir = a.state_dir.unwrap_or_else(default_state_dir);
@@ -126,6 +189,7 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
     let journal = Journal::open(&state_dir.join("journal.sqlite"))?;
     let mut config = Config {
         connections,
+        limit,
         ..Config::default()
     };
     if let Some(ms) = a.checkpoint_ms {
@@ -135,17 +199,20 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
         config.min_segment = kib.max(1) * 1024;
     }
     let engine = Downloader::new(config, journal)?;
-    let (url, sha256, json) = (a.url, a.sha256, a.json);
 
+    let quiet = a.quiet;
     let mut last_print = Instant::now() - Duration::from_secs(1);
     let mut last_kind = None;
     let req = Request {
-        url,
+        url: a.url,
         dir,
-        expected_sha256: sha256,
+        expected_sha256: a.sha256.map(|h| h.trim().to_owned()),
     };
     let outcome = engine
         .run(req, |p| {
+            if quiet {
+                return;
+            }
             let kind = p.state.kind();
             if Some(kind) == last_kind && last_print.elapsed() < Duration::from_millis(500) {
                 return;
@@ -161,10 +228,12 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
             let _ = err.flush();
         })
         .await?;
-    eprintln!();
+    if !quiet {
+        eprintln!();
+    }
 
     let path = outcome.path.as_ref().map(|p| p.display().to_string());
-    if json {
+    if a.common.json {
         let v = serde_json::json!({
             "id": outcome.id,
             "state": outcome.state,
@@ -172,6 +241,7 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
             "connections": outcome.stats.connections,
             "ramp_ms": outcome.stats.ramp_ms,
             "peak_rate": outcome.stats.peak_rate,
+            "diagnostics": diagnostics_json(l, &outcome.diagnostics),
         });
         println!("{v}");
     }
@@ -185,12 +255,87 @@ async fn get(a: GetArgs) -> anyhow::Result<u8> {
     if let Some(a) = outcome.state.recovery() {
         eprintln!("  → {}", action_label(l, a));
     }
-    Ok(match outcome.state.kind() {
-        StateKind::Complete => exit::COMPLETE,
-        StateKind::NeedsUser => exit::NEEDS_USER,
-        _ if matches!(outcome.state, DownloadState::Failed(_)) => exit::FAILED,
-        _ => exit::INTERNAL,
-    })
+    Ok(exit_for(&outcome.state))
+}
+
+fn print_doctor(l: Locale, r: &DoctorReport) {
+    let size = r
+        .size
+        .map_or_else(|| tr(l, "doctor.unknown"), |s| format::bytes(s, l));
+    println!("{}", tr_args(l, "doctor.size", &[("size", size)]));
+    let ranges = match r.ranges {
+        Some(true) => "doctor.ranges.yes",
+        Some(false) => "doctor.ranges.no",
+        None => "doctor.unknown",
+    };
+    println!(
+        "{}",
+        tr_args(l, "doctor.ranges", &[("value", tr(l, ranges))])
+    );
+    let validator = if r.validator {
+        "doctor.validator.yes"
+    } else {
+        "doctor.validator.no"
+    };
+    println!("{}", tr(l, validator));
+    if r.peak_rate > 0 {
+        println!(
+            "{}",
+            tr_args(
+                l,
+                "doctor.recommend",
+                &[
+                    ("n", r.recommended_connections.to_string()),
+                    ("rate", format::rate(r.peak_rate, l)),
+                ],
+            )
+        );
+    }
+    for d in &r.diagnostics {
+        println!("  ⓘ {}", render_diagnostic(l, d));
+    }
+    match &r.blocking {
+        Some(state) => {
+            println!("{}", describe_state(l, state));
+            if let Some(a) = state.recovery() {
+                println!("  → {}", action_label(l, a));
+            }
+        }
+        None => println!("{}", tr(l, "doctor.ok")),
+    }
+}
+
+async fn doctor(a: DoctorArgs) -> anyhow::Result<u8> {
+    let l = locale();
+    let Some(connections) = parse_connections(&a.common.connections) else {
+        let max = MAX_CONNECTIONS.to_string();
+        return Ok(usage(l, "cli.connections_limit", &[("max", max)]));
+    };
+    let config = Config {
+        connections,
+        ..Config::default()
+    };
+    // The doctor never writes; an in-memory journal keeps it that way.
+    let engine = Downloader::new(config, Journal::open_in_memory()?)?;
+    let r = engine
+        .doctor(&a.url, Duration::from_secs(a.seconds.clamp(1, 60)))
+        .await;
+    if a.common.json {
+        let v = serde_json::json!({
+            "final_url": r.final_url,
+            "size": r.size,
+            "ranges": r.ranges,
+            "validator": r.validator,
+            "recommended_connections": r.recommended_connections,
+            "peak_rate": r.peak_rate,
+            "blocking": r.blocking,
+            "diagnostics": diagnostics_json(l, &r.diagnostics),
+        });
+        println!("{v}");
+    } else {
+        print_doctor(l, &r);
+    }
+    Ok(r.blocking.as_ref().map_or(exit::COMPLETE, exit_for))
 }
 
 fn main() -> ExitCode {
@@ -209,6 +354,7 @@ fn main() -> ExitCode {
     let result = rt.block_on(async {
         match cli.command {
             Command::Get(args) => get(args).await,
+            Command::Doctor(args) => doctor(args).await,
         }
     });
     match result {
@@ -217,5 +363,29 @@ fn main() -> ExitCode {
             eprintln!("idb: {e:#}");
             ExitCode::from(exit::INTERNAL)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_connection_modes() {
+        assert_eq!(
+            parse_connections("auto"),
+            Some(Connections::Auto { max: 8 })
+        );
+        assert_eq!(parse_connections("3"), Some(Connections::Fixed(3)));
+        assert_eq!(parse_connections("fixed:2"), Some(Connections::Fixed(2)));
+        assert_eq!(parse_connections("9"), None);
+        assert_eq!(parse_connections("0"), None);
+    }
+
+    #[test]
+    fn validates_sha256() {
+        assert!(valid_sha256(&"a".repeat(64)));
+        assert!(!valid_sha256(&"a".repeat(63)));
+        assert!(!valid_sha256(&"g".repeat(64)));
     }
 }

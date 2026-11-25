@@ -141,3 +141,36 @@ msgstr "A conexão extra não ajudou ({gain}%); voltando para {to}."
 
 msgid "diag.ConnectionsAdjusted.stay"
 msgstr "Mantendo {to} conexões: é o teto educado para este servidor."
+
+msgid "cli.invalid_sha256"
+msgstr "O valor de --sha256 deve ter 64 caracteres hexadecimais (0-9, a-f)."
+
+msgid "cli.invalid_limit"
+msgstr "Não entendi o --limit. Exemplos: 2M, 500k, 1.5MiB."
+
+msgid "doctor.size"
+msgstr "Tamanho: {size}"
+
+msgid "doctor.ranges"
+msgstr "Baixar em partes: {value}"
+
+msgid "doctor.ranges.yes"
+msgstr "sim"
+
+msgid "doctor.ranges.no"
+msgstr "não"
+
+msgid "doctor.unknown"
+msgstr "desconhecido"
+
+msgid "doctor.validator.yes"
+msgstr "Verificação e retomada: possíveis (o servidor identifica a versão do arquivo)."
+
+msgid "doctor.validator.no"
+msgstr "Verificação e retomada: limitadas (o servidor não identifica a versão do arquivo)."
+
+msgid "doctor.recommend"
+msgstr "Medido: {rate} com {n} conexões."
+
+msgid "doctor.ok"
+msgstr "Nada impede o download."
