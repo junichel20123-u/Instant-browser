@@ -3,12 +3,20 @@
 use std::fs::File;
 use std::path::Path;
 
-use rustix::fs::{FallocateFlags, fallocate, fstatfs, statvfs};
+use rustix::fs::statvfs;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use rustix::fs::{FallocateFlags, fallocate, fstatfs};
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const EXT4: u32 = 0xEF53;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const XFS: u32 = 0x5846_5342;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const BTRFS: u32 = 0x9123_683E;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const TMPFS: u32 = 0x0102_1994;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const F2FS: u32 = 0xF2F5_2010;
 
 /// Bytes available to an unprivileged user on the filesystem holding `dir`.
 pub fn free_bytes(dir: &Path) -> std::io::Result<u64> {
@@ -21,12 +29,14 @@ pub fn has_room(dir: &Path, needed: u64, margin: u64) -> std::io::Result<bool> {
     Ok(free_bytes(dir)? >= needed.saturating_add(margin))
 }
 
-/// Filesystems where `fallocate` is fast and does not block for long.
+/// Filesystems where `fallocate` is fast and does not block for long
+/// (Linux and Android kernels; Android data partitions are ext4 or f2fs).
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn fast_fallocate(file: &File) -> bool {
     // `f_type`'s integer type differs across targets; the magic fits in u32.
     fstatfs(file).is_ok_and(|st| {
         let kind = st.f_type as u32;
-        matches!(kind, EXT4 | XFS | BTRFS | TMPFS)
+        matches!(kind, EXT4 | XFS | BTRFS | TMPFS | F2FS)
     })
 }
 
@@ -34,6 +44,7 @@ fn fast_fallocate(file: &File) -> bool {
 /// reserves the blocks with `fallocate`. Other filesystems (FAT, exFAT,
 /// NTFS-3G, FUSE) only get `set_len`, which never blocks for minutes.
 /// Run it off the async runtime.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn preallocate(file: &File, len: u64) -> std::io::Result<()> {
     file.set_len(len)?;
     if len > 0
@@ -43,6 +54,12 @@ pub fn preallocate(file: &File, len: u64) -> std::io::Result<()> {
         tracing::debug!("fallocate not used: {e}");
     }
     Ok(())
+}
+
+/// Other Unix systems (iOS, macOS): no `fallocate`; `set_len` only.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub fn preallocate(file: &File, len: u64) -> std::io::Result<()> {
+    file.set_len(len)
 }
 
 #[cfg(test)]

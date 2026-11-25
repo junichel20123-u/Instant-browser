@@ -9,6 +9,7 @@ mod disk;
 mod doctor;
 mod download;
 pub mod headers;
+pub mod manager;
 pub mod pairing;
 pub mod ratelimit;
 mod segmented;
