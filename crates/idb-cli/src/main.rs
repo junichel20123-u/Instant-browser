@@ -288,10 +288,10 @@ fn print_doctor(l: Locale, r: &DoctorReport) {
         "{}",
         tr_args(l, "doctor.ranges", &[("value", tr(l, ranges))])
     );
-    let validator = if r.validator {
-        "doctor.validator.yes"
-    } else {
-        "doctor.validator.no"
+    let validator = match (r.validator, r.ranges) {
+        (true, Some(false)) => "doctor.validator.verify_only",
+        (true, _) => "doctor.validator.yes",
+        (false, _) => "doctor.validator.no",
     };
     println!("{}", tr(l, validator));
     if r.peak_rate > 0 {
@@ -299,7 +299,11 @@ fn print_doctor(l: Locale, r: &DoctorReport) {
             "{}",
             tr_args(
                 l,
-                "doctor.recommend",
+                if r.recommended_connections == 1 {
+                    "doctor.recommend.one"
+                } else {
+                    "doctor.recommend"
+                },
                 &[
                     ("n", r.recommended_connections.to_string()),
                     ("rate", format::rate(r.peak_rate, l)),

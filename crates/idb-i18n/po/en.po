@@ -192,3 +192,9 @@ msgstr "Access for device {id} removed."
 
 msgid "devices.not_found"
 msgstr "There is no device {id}. See the list with: idb devices list"
+
+msgid "doctor.recommend.one"
+msgstr "Measured: {rate} with 1 connection."
+
+msgid "doctor.validator.verify_only"
+msgstr "Verification: possible. Resume: no (the server does not allow downloading in parts)."

@@ -193,6 +193,7 @@ impl Downloader {
         let mut last = 0u64;
         let mut throttled = false;
         let mut settled = false;
+        let mut settled_rate = None;
         loop {
             tokio::select! {
                 _ = window.tick() => {
@@ -209,6 +210,7 @@ impl Downloader {
                         }
                         if d.settled {
                             settled = true;
+                            settled_rate = Some(d.rate);
                             if parallel && !throttled {
                                 report.diagnostics.push(settled_diagnostic(d.to, d.rate));
                             }
@@ -249,6 +251,7 @@ impl Downloader {
                 .push(settled_diagnostic(ctl.target(), ctl.best_rate()));
         }
         report.recommended_connections = ctl.target() as u32;
-        report.peak_rate = ctl.best_rate() as u64;
+        // Report the same rate the explanation uses (the settling window).
+        report.peak_rate = settled_rate.unwrap_or_else(|| ctl.best_rate()) as u64;
     }
 }

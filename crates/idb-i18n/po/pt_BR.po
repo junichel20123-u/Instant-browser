@@ -192,3 +192,9 @@ msgstr "Acesso do dispositivo {id} removido."
 
 msgid "devices.not_found"
 msgstr "Não existe dispositivo {id}. Veja a lista com: idb devices list"
+
+msgid "doctor.recommend.one"
+msgstr "Medido: {rate} com 1 conexão."
+
+msgid "doctor.validator.verify_only"
+msgstr "Verificação: possível. Retomada: não (o servidor não aceita baixar em partes)."
